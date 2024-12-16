@@ -1,0 +1,28 @@
+{
+    "configurations": [
+        {
+            "name": "Linux (arm)",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/usr/local/include/**",
+                "/usr/include/**"
+            ],
+            "defines": [
+                "ASIO_STANDALONE"
+            ],
+            "compilerPath": "/usr/bin/aarch64-linux-gnu-g++",
+            "cStandard": "c17",
+            "cppStandard": "gnu++17",
+            "intelliSenseMode": "linux-gcc-arm64",
+            "configurationProvider": "ms-vscode.makefile-tools",
+            "browse": {
+                "path": [
+                    "${workspaceFolder}"
+                ],
+                "limitSymbolsToIncludedHeaders": false,
+                "databaseFilename": "${workspaceFolder}/.vscode/vc.db"
+            }
+        }
+    ],
+    "version": 4
+}
