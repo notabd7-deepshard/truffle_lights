@@ -219,8 +219,9 @@ needs global brightness modifier
 
 // ==== Added: LED system states ====
 enum class LEDState : uint8_t {
-    DORMANT = 0,
-    ACTIVE
+    DORMANT = 1,         // Value 1 when dormant should run
+    ACTIVE = 1 << 1,     // Value 2 when active should run
+    RESPOND_TO_USER = 1 << 2  // Value 4 when respond to user should run
 };
 
 class LEDController
@@ -238,7 +239,9 @@ public:
         shutdown();
     }
 
-    void SetState(LEDState s) { state.store(s, std::memory_order_relaxed); }
+    //void SetState(LEDState s) { state.store(s, std::memory_order_relaxed); }
+
+    void SetState(LEDState state) { this->state.store(state, std::memory_order_relaxed); }
 
 private:
     spi_t spi;
@@ -286,6 +289,7 @@ private:
     }
   
     void run_dormant();
+    void run_respond_to_user();
 };
 
 
