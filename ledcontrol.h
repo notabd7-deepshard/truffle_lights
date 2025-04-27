@@ -12,6 +12,9 @@
 #include <cmath>
 #include "spi.h"
 
+#define M_PI_F		((float)(M_PI))	
+#define RAD2DEG( x )  ( (float)(x) * (float)(180.f / M_PI_F) )
+#define DEG2RAD( x )  ( (float)(x) * (float)(M_PI_F / 180.f) )
 
 //https://jetsonhacks.com/nvidia-jetson-agx-orin-gpio-header-pinout/
 //https://controllerstech.com/ws2812-leds-using-spi/
@@ -107,6 +110,53 @@ inline led_color_t hsv2rgb(const HSV& hsv) {
     uint8_t B = static_cast<uint8_t>(std::round((b1 + m) * 255));
     return { R, G, B };
 }
+
+struct polar_t{
+    float theta;
+    int r;
+    
+    static polar_t Degrees(float angle_deg, int radius){
+        return {DEG2RAD(angle_deg), radius};
+    }
+    void rotate_deg(float deg){
+        theta += DEG2RAD(deg);
+        normalize();
+    }
+    float angle_deg() const {
+        return RAD2DEG(theta);
+    }
+    void set_angle_deg(float angle_deg){
+        theta = DEG2RAD(angle_deg);
+    }
+    polar_t& normalize(){
+        while(theta >= 2.f * M_PI_F) theta -= 2.f * M_PI_F;
+        while(theta < 0.f) theta += 2.f * M_PI_F;
+        r = std::abs(r);
+        if(r > 4) r = 4;
+        return *this;
+    }
+    operator std::pair<float, int>() const {
+        return {angle_deg(), r};
+    }
+    polar_t operator+ (const polar_t& other) const {
+        return {theta + other.theta, r + other.r};
+    }
+    polar_t operator- (const polar_t& other) const {
+        return {theta - other.theta, r - other.r};
+    }
+    polar_t operator* (float scalar) const {
+        return {theta * scalar, static_cast<int>((float)r * scalar)};
+    }
+    polar_t operator/ (float scalar) const {
+        return {theta / scalar, static_cast<int>((float)r / scalar)};
+    }
+
+    bool operator==(const polar_t& other) const {
+        //use epsilon!
+        const float eps = 0.01f;
+        return std::abs(theta - other.theta) < eps && r == other.r;
+    }
+};
 
 inline void encode_color(uint8_t r, uint8_t g, uint8_t b, char* buffer) {
     for (int i = 0; i < 8; i++) {

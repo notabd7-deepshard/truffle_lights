@@ -44,56 +44,6 @@ inline float ringunit(int ring, float mul){
     return ((ring_incs[ring] - 0.6) * mul);
 }
 
-struct polar_t{
-    float theta;
-    int r;
-    // polar_t() : theta(0.f), r(0) {}
-    // polar_t(float angle_rad, int radius) : theta(angle_rad), r(radius) {}
-    static polar_t Degrees(float angle_deg, int radius){
-        return {DEG2RAD(angle_deg), radius};
-    }
-    void rotate_deg(float deg){
-        theta += DEG2RAD(deg);
-        normalize(); //SUS!
-    }
-    float angle_deg() const {
-        return RAD2DEG(theta);
-    }
-    void set_angle_deg(float angle_deg){
-        theta = DEG2RAD(angle_deg);
-    }
-    polar_t& normalize(){
-        while(theta >= 2.f * M_PI_F) theta -= 2.f * M_PI_F;
-        while(theta < 0.f) theta += 2.f * M_PI_F;
-        r = std::abs(r);
-        if(r > 4) r = 4;
-        return *this;
-    }
-    operator std::pair<float, int>() const {
-        return {angle_deg(), r};
-    }
-    polar_t operator+ (const polar_t& other) const {
-        return {theta + other.theta, r + other.r};
-    }
-    polar_t operator- (const polar_t& other) const {
-        return {theta - other.theta, r - other.r};
-    }
-    polar_t operator* (float scalar) const {
-        return {theta * scalar, static_cast<int>((float)r * scalar)};
-    }
-    polar_t operator/ (float scalar) const {
-        return {theta / scalar, static_cast<int>((float)r / scalar)};
-    }
-
-    bool operator==(const polar_t& other) const {
-        //use epsilon!
-        const float eps = 0.01f;
-        return std::abs(theta - other.theta) < eps && r == other.r;
-    }
-
-};
-
-
 void LEDController::buildLUT() {
     int idx = 0;
     for(int ring = 0; ring < 5; ++ring) {
@@ -499,8 +449,6 @@ void LEDController::run(){
     std::unique_ptr<LEDMatrix> matrix = std::make_unique<LEDMatrix>();
     update_leds();
 
-
-
    // set_all({255,0,0});
     puts("enter loop");
 
@@ -529,44 +477,54 @@ void LEDController::run(){
     // set_line(270.f, {255,255,0});
     float t = 270.f;
     int i = 0;
-    // while(should_run.load(std::memory_order_relaxed)){       
-    //    matrix->Clear(leds);
+    while(should_run.load(std::memory_order_relaxed)){       
+       matrix->Clear(leds);
     
-    //    for(auto& anim : scene){
-    //        anim->Update();
-    //        anim->Draw(matrix.get());
-    //    }
+       // —— Stage 3 test: one Gaussian orb ——  
+       // (we'll just use scene[0] as the moving center)
+       for(auto& anim : scene){
+           anim->Update();
+       }
+       
+       polar_t center = dynamic_cast<Orb*>(scene[0].get())->GetOrigin();
 
+       HSV orbHSV     = { 240.0f, 0.8f, 1.0f };  // blue-ish
+       float sigma    = 1.0f;                    // blur radius
+       float intensity= 0.7f;                    // global brightness
 
-    polar_t center = dynamic_cast<Orb*>(scene[0].get())->GetOrigin();
+        //please work
+       static bool once=true;
+       if(once){
+           once=false;
+           printf("Center at r=%.1f,θ=%.1f°\n",
+                  center.r, RAD2DEG(center.theta));
+           led_color_t test = hsv2rgb(orbHSV)*(intensity*1.0f);
+           printf("At d=0 (F=1): RGB=(%u,%u,%u)\n",
+                  test.r, test.g, test.b);
+       }
 
-        HSV orbHSV     = { 240.0f, 0.8f, 1.0f };  // blue-ish
-        float sigma    = 1.0f;                    // blur radius
-        float intensity= 0.7f;                    // global brightness
+       for(int i = 0; i < LED_COUNT; ++i) {
+           auto p = led_lut[i];
+           float dθ = angularDifference(p.theta, center.theta);
+           float r̄ = (p.r + center.r) * 0.5f;
+           float Δr = p.r - center.r;
+           float d2 = (dθ * r̄)*(dθ * r̄) + (Δr * Δr);
+           float F  = std::exp(-d2 / (2 * sigma * sigma));
 
-        for(int i = 0; i < LED_COUNT; ++i) {
-            auto p = led_lut[i];
-            float dθ = angularDifference(p.theta, center.theta);
-            float r̄ = (p.r + center.r) * 0.5f;
-            float Δr = p.r - center.r;
-            float d2 = (dθ * r̄)*(dθ * r̄) + (Δr * Δr);
-            float F  = std::exp(-d2 / (2 * sigma * sigma));
+           // compute RGB and write into your matrix
+           led_color_t c = hsv2rgb(orbHSV) * (intensity * F);
+           matrix->set_led(p, c);
+       }
 
-            // compute RGB and write into your matrix
-            led_color_t c = hsv2rgb(orbHSV) * (intensity * F);
-            matrix->set_led(p, c);
-        }
-
-        matrix->Update(leds);
-        update_leds();
+       matrix->Update(leds);
+       update_leds();
+       
        // set_line(t, {200,25,205});
-    //     t -= 10.f;
-    //     if(t < 0.f) t = 359.9f;
-    //     if(t > 360.f) t = 0.1f;
-    //     matrix->Update(leds); 
-    //    // if(i >= LED_COUNT) i = 0;
+       t -= 10.f;
+       if(t < 0.f) t = 359.9f;
+       if(t > 360.f) t = 0.1f;
+       // if(i >= LED_COUNT) i = 0;
 
-    //     update_leds();
        // std::this_thread::sleep_for(std::chrono::microseconds(750));
     }
     
