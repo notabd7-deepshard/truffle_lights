@@ -111,12 +111,22 @@ inline led_color_t hsv2rgb(const HSV& hsv) {
     return { R, G, B };
 }
 
+// —— Stage 6: time functions ——
+// t ∈ [0,1] ease-in/out
+inline float easeInOut(float t) {
+    return 0.5f * (1.0f - cosf(M_PI_F * t));
+}
+// linear interpolate
+inline float mixf(float a, float b, float t) {
+    return a + (b - a) * t;
+}
+
 struct polar_t{
     float theta;
-    int r;
+    float r;    // now float so we can interpolate smoothly
     
     static polar_t Degrees(float angle_deg, int radius){
-        return {DEG2RAD(angle_deg), radius};
+        return {DEG2RAD(angle_deg), static_cast<float>(radius)};
     }
     void rotate_deg(float deg){
         theta += DEG2RAD(deg);
@@ -131,12 +141,12 @@ struct polar_t{
     polar_t& normalize(){
         while(theta >= 2.f * M_PI_F) theta -= 2.f * M_PI_F;
         while(theta < 0.f) theta += 2.f * M_PI_F;
-        r = std::abs(r);
-        if(r > 4) r = 4;
+        r = fabsf(r);
+        if(r > 4.0f) r = 4.0f;
         return *this;
     }
     operator std::pair<float, int>() const {
-        return {angle_deg(), r};
+        return {angle_deg(), static_cast<int>(r)};
     }
     polar_t operator+ (const polar_t& other) const {
         return {theta + other.theta, r + other.r};
@@ -145,16 +155,16 @@ struct polar_t{
         return {theta - other.theta, r - other.r};
     }
     polar_t operator* (float scalar) const {
-        return {theta * scalar, static_cast<int>((float)r * scalar)};
+        return {theta * scalar, r * scalar};
     }
     polar_t operator/ (float scalar) const {
-        return {theta / scalar, static_cast<int>((float)r / scalar)};
+        return {theta / scalar, r / scalar};
     }
 
     bool operator==(const polar_t& other) const {
         //use epsilon!
         const float eps = 0.01f;
-        return std::abs(theta - other.theta) < eps && r == other.r;
+        return std::abs(theta - other.theta) < eps && std::abs(r - other.r) < eps;
     }
 };
 

@@ -52,7 +52,7 @@ void LEDController::buildLUT() {
             float theta = (ring == 0)
                         ? 0.0f
                         : DEG2RAD((360.0f / count) * i);
-            led_lut[idx++] = polar_t{ theta, ring };
+            led_lut[idx++] = polar_t{ theta, static_cast<float>(ring) };
         }
     }
 }
@@ -169,18 +169,19 @@ public:
         return {ring, led};
     }
     std::pair<int, int> polar_to_ring(polar_t coords){
-        if(std::abs(coords.r) > 4) return {0xffff, 0xffff};
-        if(coords.r == 0) return {0, 0};
+        if(std::abs(coords.r) > 4.0f) return {0xffff, 0xffff};
+        if(coords.r < 0.5f) return {0, 0};  // Consider values less than 0.5 as center
         coords.normalize();
 
-        int ring = std::abs(coords.r); 
+        int ring = static_cast<int>(std::round(coords.r)); 
+        ring = std::min(4, std::max(0, ring)); // Clamp to valid range
        
         float led_idx_f = (coords.theta / (2.f * M_PI_F) ) * ( static_cast<float>(ring_sizes[ring]));
        
         int led = static_cast<int>(std::round(led_idx_f) );
         if(led != 0 && led == ring_sizes[ring]) led = 0;
 
-        //printf("angle: %f, radius: %d, ring: %d, led: %d\n", RAD2DEG(coords.theta), coords.r, ring, led); 
+        //printf("angle: %f, radius: %f, ring: %d, led: %d\n", RAD2DEG(coords.theta), coords.r, ring, led); 
         return {ring, led};
     }
     std::pair<int, int> grid_to_ring(int x, int y) {
@@ -213,10 +214,15 @@ public:
         rings[ring]->set_led(led, color);
     }
 
+    void set_led(float angle_deg, float radius, led_color_t color){
+        polar_t coords = {DEG2RAD(angle_deg), radius};
+        set_led(coords, color);
+    }
+
     void set_led(polar_t coords, led_color_t color){
         auto [ring, led] = polar_to_ring(coords);
         if(ring == 0xffff || led == 0xffff){
-            printf("Invalid coords: %f, %d\n", coords.theta, coords.r);
+            printf("Invalid coords: %f, %f\n", RAD2DEG(coords.theta), coords.r);
             return;
         }
         rings[ring]->set_led(led, color);
@@ -253,16 +259,24 @@ public:
     virtual ~Animatable() = default;
 
     void SetOrigin(float angle_deg, int radius){
-       this->origin = polar_t::Degrees(angle_deg, radius);
+       this->origin = polar_t::Degrees(angle_deg, static_cast<float>(radius));
     }
+    
+    // new overload to set a full polar directly
+    void SetOrigin(const polar_t &p){
+        origin = p;
+    }
+    
     polar_t GetOrigin() const {
         return origin;
     }
+    
+    // Make start time accessible for fusion calculations
+    std::chrono::time_point<std::chrono::high_resolution_clock> start;
+    
 protected:
     std::vector<animLED> leds;
     polar_t origin;
-
-    std::chrono::time_point<std::chrono::high_resolution_clock> start;
 };
 
 class Orb : public Animatable{
@@ -270,52 +284,52 @@ class Orb : public Animatable{
 
 
 
-    Orb(int size = 3,  led_color_t base_color = {245,245,245}, polar_t origin = {0.f,3}) {
+    Orb(int size = 3,  led_color_t base_color = {245,245,245}, polar_t origin = {0.f, 3.0f}) {
        
         this->origin = origin;
         float mul = 1.f;
         const float mulmul = 0.85f;
         //ORIGIN
-        leds.push_back({{DEG2RAD(0.f), 0}, base_color});
+        leds.push_back({{DEG2RAD(0.f), 0.0f}, base_color});
         //LINE OF 3 DOWN CENTER
-        leds.push_back({{DEG2RAD(0.f), -1}, base_color});
-        leds.push_back({{DEG2RAD(0.f), 1}, base_color});
-        if(origin.r <= 2)
-            leds.push_back({{DEG2RAD(0.f), 2}, base_color});
+        leds.push_back({{DEG2RAD(0.f), -1.0f}, base_color});
+        leds.push_back({{DEG2RAD(0.f), 1.0f}, base_color});
+        if(origin.r <= 2.0f)
+            leds.push_back({{DEG2RAD(0.f), 2.0f}, base_color});
         if(size == 1) return;
 
 
         //LEFT AND RIGHT OF CENTER
-        leds.push_back({{DEG2RAD(ringunit(origin.r, -1.f)), 0}, base_color});
-        leds.push_back({{DEG2RAD(ringunit(origin.r, 1.f)), 0}, base_color});   
+        leds.push_back({{DEG2RAD(ringunit(static_cast<int>(origin.r), -1.f)), 0.0f}, base_color});
+        leds.push_back({{DEG2RAD(ringunit(static_cast<int>(origin.r), 1.f)), 0.0f}, base_color});   
 
 
         //LEFT AND RIGHT TOP
-        leds.push_back({{DEG2RAD(ringunit(origin.r + 1, -1.f)), 1}, base_color});
-        leds.push_back({{DEG2RAD(ringunit(origin.r + 1, 1.f)), 1}, base_color});   
-        if(origin.r <= 2){
-            leds.push_back({{DEG2RAD(ringunit(origin.r + 2, -1.f)), 2}, base_color});
-            leds.push_back({{DEG2RAD(ringunit(origin.r + 2, 1.f)), 2}, base_color});   
+        leds.push_back({{DEG2RAD(ringunit(static_cast<int>(origin.r) + 1, -1.f)), 1.0f}, base_color});
+        leds.push_back({{DEG2RAD(ringunit(static_cast<int>(origin.r) + 1, 1.f)), 1.0f}, base_color});   
+        if(origin.r <= 2.0f){
+            leds.push_back({{DEG2RAD(ringunit(static_cast<int>(origin.r) + 2, -1.f)), 2.0f}, base_color});
+            leds.push_back({{DEG2RAD(ringunit(static_cast<int>(origin.r) + 2, 1.f)), 2.0f}, base_color});   
         }
         //LEFT AND RIGHT BOTTOM
-        leds.push_back({{DEG2RAD(ringunit(origin.r - 1,  -1.f)), -1}, base_color});
-        leds.push_back({{DEG2RAD(ringunit(origin.r + 1, 1.f)), -1}, base_color});   
+        leds.push_back({{DEG2RAD(ringunit(static_cast<int>(origin.r) - 1, -1.f)), -1.0f}, base_color});
+        leds.push_back({{DEG2RAD(ringunit(static_cast<int>(origin.r) + 1, 1.f)), -1.0f}, base_color});   
         if(size == 2) return;
 
         
         for(int i = 3; i <= size; ++i){
             int ii = i - 2;
             for(int j = -1; j <= 1; ++j){
-                float angle = ringunit(origin.r + j,  ii * -1.f); // -11.5f * ii;
+                float angle = ringunit(static_cast<int>(origin.r) + j, ii * -1.f); // -11.5f * ii;
                // if(j == 1) angle = -4.f * ii;
-                leds.push_back({{DEG2RAD(angle), j}, base_color * mul});
+                leds.push_back({{DEG2RAD(angle), static_cast<float>(j)}, base_color * mul});
                // printf("Orb[%d]: %f, %d\n", i, -20.f * ii, j);
             }
             for(int j = -1; j <= 1; ++j){
-                float angle = ringunit(origin.r + j, ii * 1.f); // -11.5f * ii;
+                float angle = ringunit(static_cast<int>(origin.r) + j, ii * 1.f); // -11.5f * ii;
               //  float angle = 11.f * ii;
                 //if(j == 1) angle = 8.f * ii;
-                leds.push_back({{DEG2RAD(angle), j}, base_color * mul});
+                leds.push_back({{DEG2RAD(angle), static_cast<float>(j)}, base_color * mul});
             //     printf("Orb[%d]: %f, %d\n", i, 25.f * ii, j);
             }
             mul *= mulmul;
@@ -376,14 +390,14 @@ class Orb : public Animatable{
 
 class Glow : public Animatable{
     public:
-    Glow(int size = 3,  led_color_t base_color = {255,255,255}, led_color_t min_color = {0,0,0}) : base_color(base_color), min_color(min_color), max_size(size) {
+    Glow(int size = 3, led_color_t base_color = {255,255,255}, led_color_t min_color = {0,0,0}) : base_color(base_color), min_color(min_color), max_size(size) {
         if(size < 3) throw std::invalid_argument("Glow size must be at least 3");
         this->SetOrigin(0.f, 0);
-        leds.push_back({{DEG2RAD(0.f), 0}, {0,0,0}});
+        leds.push_back({{DEG2RAD(0.f), 0.0f}, {0,0,0}});
 
         for(int i = 0; i < size; ++i){
             for(int j = 0; j < ring_sizes[i]; ++j){
-                leds.push_back({{DEG2RAD(ringunit(i, j)), i},{0,0,0}});
+                leds.push_back({{DEG2RAD(ringunit(i, j)), static_cast<float>(i)}, {0,0,0}});
             }
         }
         current_size = 0.f;
@@ -462,7 +476,7 @@ void LEDController::run(){
    // scene.push_back(std::make_unique<Glow>(4, led_color_t{255, 255, 255}, led_color_t{25,25,25}));  //pulse
 
 
-    scene.push_back(std::make_unique<Orb>(4, led_color_t{245,245,245}, polar_t{0.f, 3})); //white orb
+    scene.push_back(std::make_unique<Orb>(4, led_color_t{245,245,245}, polar_t{0.f, 3.0f})); //white orb
    // scene.back()->SetOrigin(0.f, 2);
     scene.push_back(std::make_unique<Orb>(4, led_color_t{40, 120, 255}, polar_t::Degrees(120.f, 3))); //blue orb
    // scene.back()->SetOrigin(120.f, 2);
@@ -489,9 +503,56 @@ void LEDController::run(){
     while(should_run.load(std::memory_order_relaxed)){       
        matrix->Clear(leds);
     
-       // Update orb positions
+       // 6.1 linear motion
        for(auto& anim : scene){
            anim->Update();
+       }
+       
+       // once-only for triggering spiral
+       static bool spiralTriggered = false;
+       static uint64_t spiralStartUs = 0;
+       const uint64_t spiralDurationUs = 2000000; // 2 seconds
+       
+       // grab each centre
+       auto c0 = dynamic_cast<Orb*>(scene[0].get())->GetOrigin();
+       auto c1 = dynamic_cast<Orb*>(scene[1].get())->GetOrigin();
+       auto c2 = dynamic_cast<Orb*>(scene[2].get())->GetOrigin();
+       
+       auto sep = [&](const polar_t &a, const polar_t &b){
+           // Euclid dist in LED units
+           float dθ = angularDifference(a.theta, b.theta);
+           float r̄  = (a.r + b.r) * 0.5f;
+           float Δr  = a.r - b.r;
+           return sqrtf((dθ*r̄)*(dθ*r̄) + Δr*Δr);
+       };
+       
+       float sep01 = sep(c0, c1), sep12 = sep(c1, c2);
+       
+       uint64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                         std::chrono::high_resolution_clock::now() - scene[0]->start
+                      ).count();
+       
+       if (!spiralTriggered && sep01 < 0.25f && sep12 < 0.25f) {
+           spiralTriggered = true;
+           spiralStartUs  = nowUs;
+           printf("Fusion! starting spiral\n");
+       }
+       
+       if (spiralTriggered) {
+           uint64_t dt = nowUs - spiralStartUs;
+           float tNorm = std::min(1.0f, dt / float(spiralDurationUs));
+           float e     = easeInOut(tNorm);
+           
+           // apply r(t) = mix(r_start, 0, e)
+           for (auto &anim : scene) {
+               Orb *orb = dynamic_cast<Orb*>(anim.get());
+               auto  C   = orb->GetOrigin();
+               float startR = 3.0f;              // your initial ring
+               float newR   = mixf(startR, 0.0f, e);
+               
+               C.r = newR;                       // float radius
+               orb->SetOrigin(C);
+           }
        }
        
        static bool once=true;
