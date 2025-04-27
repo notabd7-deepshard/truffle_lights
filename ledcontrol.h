@@ -217,6 +217,12 @@ needs global brightness modifier
 
 #define DEFAULT_COLOR {128, 128, 128}
 
+// ==== Added: LED system states ====
+enum class LEDState : uint8_t {
+    DORMANT = 0,
+    ACTIVE
+};
+
 class LEDController
 {
 public:
@@ -232,7 +238,7 @@ public:
         shutdown();
     }
 
-
+    void SetState(LEDState s) { state.store(s, std::memory_order_relaxed); }
 
 private:
     spi_t spi;
@@ -243,6 +249,7 @@ private:
     std::array<led_color_t, LED_COUNT> leds;
     static_assert(LED_COUNT * 24 < SPI_BUFFER_SIZE );
     
+    std::atomic<LEDState> state{LEDState::DORMANT};
 
     void buildLUT();
 
@@ -278,6 +285,7 @@ private:
         puts("LEDController cleanly shutdown");
     }
   
+    void run_dormant();
 };
 
 

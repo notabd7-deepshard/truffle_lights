@@ -501,8 +501,20 @@ void LEDController::run(){
     float t = 270.f;
     int i = 0;
     while(should_run.load(std::memory_order_relaxed)){       
+   
+       if(state.load(std::memory_order_relaxed) == LEDState::DORMANT){
+           static Glow dormGlow(5, led_color_t{40, 120, 255}, led_color_t{5,5,10});
+           matrix->Clear(leds);
+           dormGlow.Update();
+           dormGlow.Draw(matrix.get());
+           matrix->Update(leds);
+           update_leds();
+           std::this_thread::sleep_for(std::chrono::milliseconds(10));
+           continue;
+       }
+
        matrix->Clear(leds);
-    
+
        // 6.1 linear motion
        for(auto& anim : scene){
            anim->Update();
@@ -611,6 +623,10 @@ void LEDController::run(){
     }
     
     puts("exit loop");
+}
+
+void LEDController::run_dormant(){
+    // placeholder for future dedicated dormant loop (currently handled inline in run())
 }
 
 #endif
