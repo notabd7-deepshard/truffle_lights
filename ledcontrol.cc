@@ -470,6 +470,15 @@ void LEDController::run(){
     scene.push_back(std::make_unique<Orb>(4, led_color_t{240, 50, 105}, polar_t::Degrees(240.f, 3))); //red orb
   //  scene.back()->SetOrigin(240.f, 2);
 
+    // —— Stage 4: parameters for all orbs ——  
+    // (must match your scene.push_back order)
+    std::vector<HSV>    orbHSV = {
+        {245.0f, 0.8f, 1.0f},   // white-ish
+        { 40.0f, 0.8f, 1.0f},   // blue
+        {240.0f, 0.8f, 1.0f}    // magenta
+    };
+    std::vector<float>  sigma  = { 1.0f, 1.0f, 1.0f };
+    std::vector<float>  I      = { 0.7f, 0.7f, 0.7f };
     
     // set_line(0.f, {255,0,0});
     // set_line(90.f, {0,255,0});
@@ -480,43 +489,55 @@ void LEDController::run(){
     while(should_run.load(std::memory_order_relaxed)){       
        matrix->Clear(leds);
     
-       // —— Stage 3 test: one Gaussian orb ——  
-       // (we'll just use scene[0] as the moving center)
+       // Update orb positions
        for(auto& anim : scene){
            anim->Update();
        }
        
-       polar_t center = dynamic_cast<Orb*>(scene[0].get())->GetOrigin();
-
-       HSV orbHSV     = { 240.0f, 0.8f, 1.0f };  // blue-ish
-       float sigma    = 1.0f;                    // blur radius
-       float intensity= 0.7f;                    // global brightness
-
-        //please work
        static bool once=true;
        if(once){
            once=false;
-           printf("Center at r=%.1f,θ=%.1f°\n",
-                  center.r, RAD2DEG(center.theta));
-           led_color_t test = hsv2rgb(orbHSV)*(intensity*1.0f);
-           printf("At d=0 (F=1): RGB=(%u,%u,%u)\n",
-                  test.r, test.g, test.b);
+           for (size_t i = 0; i < scene.size(); i++) {
+               auto orbPtr = dynamic_cast<Orb*>(scene[i].get());
+               polar_t C = orbPtr->GetOrigin();
+               printf("Orb %zu at r=%.1f,θ=%.1f°\n", 
+                      i, C.r, RAD2DEG(C.theta));
+               led_color_t test = hsv2rgb(orbHSV[i])*(I[i]*1.0f);
+               printf("  RGB=(%u,%u,%u)\n", test.r, test.g, test.b);
+           }
+       }
+ 
+       // zero‐out LED framebuffer
+       for(int i = 0; i < LED_COUNT; ++i)
+           leds[i] = {0,0,0};
+
+       // for each orb…
+       for(size_t o = 0; o < scene.size(); ++o) {
+           auto orbPtr = dynamic_cast<Orb*>(scene[o].get());
+           polar_t C = orbPtr->GetOrigin();
+
+           // for each LED
+           for(int i = 0; i < LED_COUNT; ++i) {
+               polar_t P = led_lut[i];
+
+               float dθ = angularDifference(P.theta, C.theta);
+               float r̄ = (P.r + C.r) * 0.5f;
+               float Δr = P.r - C.r;
+               float d2 = (dθ * r̄)*(dθ * r̄) + (Δr * Δr);
+               float F  = std::exp(-d2 / (2 * sigma[o] * sigma[o]));
+
+               // orb‐specific base color
+               led_color_t base = hsv2rgb(orbHSV[o]);
+
+               // scaled contribution
+               led_color_t contrib = base * (I[o] * F);
+
+               // additive blend (operator+ clamps at 255)
+               leds[i] = leds[i] + contrib;
+           }
        }
 
-       for(int i = 0; i < LED_COUNT; ++i) {
-           auto p = led_lut[i];
-           float dθ = angularDifference(p.theta, center.theta);
-           float r̄ = (p.r + center.r) * 0.5f;
-           float Δr = p.r - center.r;
-           float d2 = (dθ * r̄)*(dθ * r̄) + (Δr * Δr);
-           float F  = std::exp(-d2 / (2 * sigma * sigma));
-
-           // compute RGB and write into your matrix
-           led_color_t c = hsv2rgb(orbHSV) * (intensity * F);
-           matrix->set_led(p, c);
-       }
-
-       matrix->Update(leds);
+       // push to hardware
        update_leds();
        
        // set_line(t, {200,25,205});
