@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <condition_variable>
-
+#include <cmath>
 #include "spi.h"
 
 
@@ -45,8 +45,68 @@ struct led_color_t {
             static_cast<uint8_t>(std::max(0.0f, std::min(255.0f, b / scalar)))
         };
     }
+    bool operator==(const led_color_t& other) const {
+        return r == other.r && g == other.g && b == other.b;
+    }
 
+    bool operator!=(const led_color_t& other) const {
+        return !(*this == other);
+    }
+    bool operator>(const led_color_t& other) const {
+        return r > other.r && g > other.g && b > other.b;
+    }
+    bool operator<(const led_color_t& other) const {
+        return r < other.r && g < other.g && b < other.b;
+    }
+
+    bool operator>=(const led_color_t& other) const {
+        return r >= other.r && g >= other.g && b >= other.b;
+    }
+    bool operator<=(const led_color_t& other) const {
+        return r <= other.r && g <= other.g && b <= other.b;
+    }
+    bool operator<(uint8_t val) const {
+        return r < val && g < val && b < val;
+    }
+    bool operator>(uint8_t val) const {
+        return r > val && g > val && b > val;
+    }
+    bool operator==(uint8_t val) const {
+        return r == val && g == val && b == val;
+    }
+    
+    operator bool() const {
+        return r || g || b;
+    }
 };
+
+struct HSV {
+    float h; // [0,360)
+    float s; // [0,1]
+    float v; // [0,1]
+};
+
+inline led_color_t hsv2rgb(const HSV& hsv) {
+    float H = hsv.h;
+    float S = hsv.s;
+    float V = hsv.v;
+    float C = V * S;
+    float X = C * (1 - std::fabs(fmod(H/60.0f, 2) - 1));
+    float m = V - C;
+
+    float r1, g1, b1;
+    if      (H <  60) { r1 = C; g1 = X; b1 = 0; }
+    else if (H < 120) { r1 = X; g1 = C; b1 = 0; }
+    else if (H < 180) { r1 = 0; g1 = C; b1 = X; }
+    else if (H < 240) { r1 = 0; g1 = X; b1 = C; }
+    else if (H < 300) { r1 = X; g1 = 0; b1 = C; }
+    else              { r1 = C; g1 = 0; b1 = X; }
+
+    uint8_t R = static_cast<uint8_t>(std::round((r1 + m) * 255));
+    uint8_t G = static_cast<uint8_t>(std::round((g1 + m) * 255));
+    uint8_t B = static_cast<uint8_t>(std::round((b1 + m) * 255));
+    return { R, G, B };
+}
 
 inline void encode_color(uint8_t r, uint8_t g, uint8_t b, char* buffer) {
     for (int i = 0; i < 8; i++) {
@@ -101,6 +161,7 @@ class LEDController
 {
 public:
     LEDController() : spi(WS2812B_SPI_SPEED) {
+        buildLUT();
         if(spi.state == SPI_OPEN){
             off();
             control_thread = std::thread(&LEDController::run, this);
@@ -115,6 +176,7 @@ public:
 
 private:
     spi_t spi;
+    std::array<polar_t, LED_COUNT> led_lut;
     std::thread control_thread;
     std::atomic_bool should_run{true};
 
@@ -122,7 +184,7 @@ private:
     static_assert(LED_COUNT * 24 < SPI_BUFFER_SIZE );
     
 
-
+    void buildLUT();
 
     inline void update_leds(){
         char tx[LED_COUNT * 24] = {0};
@@ -133,7 +195,7 @@ private:
             //damn that sucks
             puts("SPI transfer failed");
         }
-        usleep(50);
+        usleep(5);
     };
 
     inline void set_all(const led_color_t& color, bool no_update = false){
