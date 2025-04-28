@@ -249,6 +249,12 @@ public:
 
     void SetState(LEDState state) { this->state.store(state, std::memory_order_relaxed); }
     
+    // Add a method to request state transition with HSV profiles
+    void RequestState(LEDState newState, const std::array<HSV,3>& targetHSV) {
+        pendingNextState = newState;
+        nextHSV = targetHSV;
+    }
+    
     // Add transition function for testing
     void run_transition_test();
 
