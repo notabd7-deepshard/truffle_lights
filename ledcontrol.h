@@ -10,11 +10,16 @@
 #include <cstdio>
 #include <condition_variable>
 #include <cmath>
+#include <optional>
+#include <array>
 #include "spi.h"
 
 #define M_PI_F		((float)(M_PI))	
 #define RAD2DEG( x )  ( (float)(x) * (float)(180.f / M_PI_F) )
 #define DEG2RAD( x )  ( (float)(x) * (float)(M_PI_F / 180.f) )
+
+// Forward declaration
+class LEDMatrix;
 
 //https://jetsonhacks.com/nvidia-jetson-agx-orin-gpio-header-pinout/
 //https://controllerstech.com/ws2812-leds-using-spi/
@@ -243,6 +248,9 @@ public:
     //void SetState(LEDState s) { state.store(s, std::memory_order_relaxed); }
 
     void SetState(LEDState state) { this->state.store(state, std::memory_order_relaxed); }
+    
+    // Add transition function for testing
+    void run_transition_test();
 
 private:
     spi_t spi;
@@ -254,6 +262,11 @@ private:
     static_assert(LED_COUNT * 24 < SPI_BUFFER_SIZE );
     
     std::atomic<LEDState> state{LEDState::DORMANT};
+    
+    // For transition states
+    std::optional<LEDState> pendingNextState;
+    std::array<HSV, 3> currentHSV;
+    std::array<HSV, 3> nextHSV;
 
     void buildLUT();
 
@@ -281,6 +294,7 @@ private:
         update_leds();
     }
     void run();
+    void run_transition(LEDMatrix* matrix);
     void shutdown(){
         if(spi.state == SPI_OPEN) off();
         should_run.store(false);

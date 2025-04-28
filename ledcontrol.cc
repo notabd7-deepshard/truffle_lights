@@ -1,12 +1,11 @@
 #ifdef __aarch64__
 
 #include "ledcontrol.h"
-
-
 #include <random>
 #include <exception>
 #include <stdexcept>
 #include <cmath>
+#include <optional>
 
 #define M_PI_F		((float)(M_PI))	
 #define RAD2DEG( x )  ( (float)(x) * (float)(180.f / M_PI_F) )
@@ -220,6 +219,8 @@ public:
     }
 
     void set_led(polar_t coords, led_color_t color){
+        // Ensure coords are normalized before processing
+        coords.normalize();
         auto [ring, led] = polar_to_ring(coords);
         if(ring == 0xffff || led == 0xffff){
             printf("Invalid coords: %f, %f\n", RAD2DEG(coords.theta), coords.r);
@@ -285,8 +286,8 @@ class Orb : public Animatable{
 
 
     Orb(int size = 3,  led_color_t base_color = {245,245,245}, polar_t origin = {0.f, 3.0f}) {
-       
-        this->origin = origin;
+        // Make sure the origin is normalized
+        this->origin = origin.normalize();
         float mul = 1.f;
         const float mulmul = 0.85f;
         //ORIGIN
@@ -453,9 +454,227 @@ class Glow : public Animatable{
 
 //helper for ang diff
 static float angularDifference(float a, float b) {
+    // Normalize angles to [0, 2π) if not already
+    while (a < 0) a += 2.0f * M_PI_F;
+    while (a >= 2.0f * M_PI_F) a -= 2.0f * M_PI_F;
+    while (b < 0) b += 2.0f * M_PI_F;
+    while (b >= 2.0f * M_PI_F) b -= 2.0f * M_PI_F;
+    
     float d = fabs(a - b);
     d = fmod(d, 2.0f * M_PI_F);
     return (d > M_PI_F) ? (2.0f * M_PI_F - d) : d;
+}
+
+class TransitionSpiral : public Animatable {
+public:
+    // from/to HSV palettes for three orbs
+    TransitionSpiral(const std::array<HSV,3>& from,
+                     const std::array<HSV,3>& to,
+                     float duration = 1.8f)
+    : hsv_from(from), hsv_to(to), phase(IN), t_phase(0.0f) {
+        last_update = std::chrono::high_resolution_clock::now();
+        // initialize three Orb objects for spiral-in/out
+        for(int k = 0; k < 3; ++k) {
+            // Start at radius 4 (maximum valid value) to be safe
+            orbs.emplace_back(std::make_unique<Orb>(4, hsv2rgb(hsv_from[k]), polar_t::Degrees(k * 120.f, 3)));
+        }
+        this->dt = 0.0f;
+    }
+
+    void Update() override {
+        // advance t_phase based on elapsed time
+        auto now = std::chrono::high_resolution_clock::now();
+        dt = std::chrono::duration<float>(now - last_update).count();
+        last_update = now;
+        t_phase += dt;
+        switch(phase) {
+            case IN:
+                if (t_phase >= T_in) { phase = FLASH; t_phase = 0.0f; }
+                break;
+            case FLASH:
+                if (t_phase >= T_flash) { phase = OUT; t_phase = 0.0f; }
+                break;
+            case OUT:
+                if (t_phase >= T_out)   { phase = DONE; }
+                break;
+            default:
+                break;
+        }
+
+        // Update orbs parameters based on the current phase
+        float t_norm = (phase == IN)  ? (t_phase / T_in)
+                      : (phase == OUT) ? (t_phase / T_out)
+                      : 1.0f;
+        float e = easeInOut(t_norm);
+
+        for(int k = 0; k < 3; ++k) {
+            Orb* orb = dynamic_cast<Orb*>(orbs[k].get());
+            float start_angle = k * 120.f;
+            float omega = mixf((phase==IN?40.f:340.f), (phase==IN?340.f:60.f), e);
+            // Clamp radius between 0 and 3 (safer than 4 to avoid edge cases)
+            float r = mixf((phase==IN?3.f:0.f), (phase==IN?0.f:3.f), e);
+            
+            // update orb meta
+            orb->rot_speed = omega;
+            polar_t newPos = polar_t::Degrees(start_angle + omega * dt, r);
+            newPos.normalize(); // Ensure position is valid
+            orb->SetOrigin(newPos);
+        }
+    }
+
+    void Draw(LEDMatrix* matrix) override {
+        if (phase == FLASH) {
+            matrix->set_all({255,255,255});
+            return;
+        }
+        
+        // Draw all orbs
+        for(auto& orb : orbs) {
+            orb->Draw(matrix);
+        }
+    }
+
+    bool finished() const { return phase == DONE; }
+
+private:
+    enum Phase { IN, FLASH, OUT, DONE } phase;
+    float t_phase;
+    float dt;
+    const float T_in    = 0.6f;
+    const float T_flash = 0.06f;
+    const float T_out   = 1.1f;
+    std::array<HSV,3> hsv_from, hsv_to;
+    std::vector<std::unique_ptr<Animatable>> orbs;
+    std::chrono::time_point<std::chrono::high_resolution_clock> last_update;
+};
+
+void LEDController::run_transition(LEDMatrix* matrix) {
+    static std::optional<TransitionSpiral> transition;
+
+    // Set initial HSV values for testing if not already set
+    if (currentHSV[0].h == 0 && currentHSV[0].s == 0 && currentHSV[0].v == 0) {
+        currentHSV = {
+            HSV{180.0f, 0.9f, 1.0f},    // Cyan
+            HSV{300.0f, 0.9f, 1.0f},    // Magenta
+            HSV{60.0f, 0.9f, 1.0f}      // Yellow
+        };
+    }
+
+    // Check if a transition is pending
+    if (pendingNextState && !transition) {
+        transition.emplace(currentHSV, nextHSV);
+    }
+    
+    // If there's an active transition, update and draw it
+    if (transition) {
+        transition->Update();
+        transition->Draw(matrix);
+        if (transition->finished()) {
+            // Commit state change
+            currentHSV = nextHSV;
+            pendingNextState.reset();
+            transition.reset();
+        }
+        update_leds();
+        return; // Skip normal rendering
+    }
+}
+
+void LEDController::run_transition_test() {
+    // Set up test values
+    std::unique_ptr<LEDMatrix> matrix = std::make_unique<LEDMatrix>();
+    
+    // Create scene with the same structure as in run() but with different colors
+    std::vector<std::unique_ptr<Animatable>> scene;
+    
+    // Create three orbs with different colors (positioned at radius 3.0, not 5.0)
+    scene.push_back(std::make_unique<Orb>(4, led_color_t{220, 50, 220}, polar_t{0.f, 3.0f})); // Purple orb
+    scene.push_back(std::make_unique<Orb>(4, led_color_t{50, 220, 220}, polar_t::Degrees(120.f, 3))); // Cyan orb
+    scene.push_back(std::make_unique<Orb>(4, led_color_t{220, 220, 50}, polar_t::Degrees(240.f, 3))); // Yellow orb
+    
+    // Set parameters for all orbs (matching the structure in run())
+    std::vector<HSV> orbHSV = {
+        HSV{300.0f, 0.9f, 1.0f},   // Purple-ish
+        HSV{180.0f, 0.9f, 1.0f},   // Cyan
+        HSV{60.0f, 0.9f, 1.0f}     // Yellow
+    };
+    
+    // Initialize currentHSV array from orbHSV
+    for (size_t i = 0; i < std::min(orbHSV.size(), currentHSV.size()); i++) {
+        currentHSV[i] = orbHSV[i];
+    }
+    
+    // Target HSV values for transition
+    nextHSV = {
+        HSV{120.0f, 0.9f, 1.0f},   // Green
+        HSV{0.0f, 1.0f, 1.0f},     // Red
+        HSV{240.0f, 0.8f, 1.0f}    // Blue
+    };
+    
+    std::vector<float> sigma = {1.0f, 1.0f, 1.0f};  // Gaussian blur radius
+    std::vector<float> I = {0.7f, 0.7f, 0.7f};      // Intensity
+    
+    // Run test for a few seconds
+    for (int frame = 0; frame < 1000 && should_run.load(std::memory_order_relaxed); frame++) {
+        matrix->Clear(leds);
+        
+        // Manually update orbs
+        for (auto& anim : scene) {
+            anim->Update();
+        }
+        
+        // Reset LED buffer for this frame
+        for (int i = 0; i < LED_COUNT; ++i) {
+            leds[i] = {0, 0, 0};
+        }
+        
+        // Render each orb with Gaussian distribution
+        for (size_t o = 0; o < scene.size(); ++o) {
+            auto orbPtr = dynamic_cast<Orb*>(scene[o].get());
+            polar_t C = orbPtr->GetOrigin();
+            
+            // Make sure the coordinate is valid (normalized)
+            C.normalize();
+            
+            // For each LED
+            for (int i = 0; i < LED_COUNT; ++i) {
+                polar_t P = led_lut[i];
+                
+                float dθ = angularDifference(P.theta, C.theta);
+                float r̄ = (P.r + C.r) * 0.5f;
+                float Δr = P.r - C.r;
+                float d2 = (dθ * r̄)*(dθ * r̄) + (Δr * Δr);
+                float F = std::exp(-d2 / (2 * sigma[o] * sigma[o]));
+                
+                // Orb-specific base color
+                led_color_t base = hsv2rgb(orbHSV[o]);
+                
+                // Scaled contribution
+                led_color_t contrib = base * (I[o] * F);
+                
+                // Additive blend
+                leds[i] = leds[i] + contrib;
+            }
+        }
+        
+        // Push to hardware
+        update_leds();
+        
+        // Every 300 frames, swap colors to trigger transition
+        if (frame > 0 && frame % 300 == 0) {
+            std::swap(currentHSV, nextHSV);
+            pendingNextState = LEDState::ACTIVE;
+            
+            // Run the transition (will continue until finished)
+            while (pendingNextState && should_run.load(std::memory_order_relaxed)) {
+                matrix->Clear(leds);
+                run_transition(matrix.get());
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
 }
 
 void LEDController::run(){
@@ -491,6 +710,12 @@ void LEDController::run(){
         { 40.0f, 0.8f, 1.0f},   // blue
         {240.0f, 0.8f, 1.0f}    // magenta
     };
+    
+    // Initialize the currentHSV array from orbHSV
+    for (size_t i = 0; i < std::min(orbHSV.size(), currentHSV.size()); i++) {
+        currentHSV[i] = orbHSV[i];
+    }
+    
     std::vector<float>  sigma  = { 1.0f, 1.0f, 1.0f };
     std::vector<float>  I      = { 0.7f, 0.7f, 0.7f };
     
@@ -514,6 +739,13 @@ void LEDController::run(){
            run_prompt();
            continue;
        }
+       
+       // Check for and run transitions between states if needed
+       run_transition(matrix.get());
+       if (pendingNextState) {
+           continue; // Skip normal rendering if transition is active
+       }
+       
        // If neither dormant nor respond_to_user, then run active state
        matrix->Clear(leds);
 

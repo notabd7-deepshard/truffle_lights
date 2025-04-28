@@ -34,6 +34,11 @@ int main() {
         std::this_thread::sleep_for(std::chrono::seconds(15));
         if (!running) break;
         
+        // Test transition spiral animation
+        std::cout << "Testing TRANSITION spiral animation for 10 seconds...\n";
+        ledController.run_transition_test();
+        if (!running) break;
+        
         // Switch to active state
         std::cout << "Setting ACTIVE state for 15 seconds...\n";
         ledController.SetState(LEDState::ACTIVE);
