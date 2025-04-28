@@ -221,7 +221,8 @@ needs global brightness modifier
 enum class LEDState : uint8_t {
     DORMANT = 1,         // Value 1 when dormant should run
     ACTIVE = 1 << 1,     // Value 2 when active should run
-    RESPOND_TO_USER = 1 << 2  // Value 4 when respond to user should run
+    RESPOND_TO_USER = 1 << 2,  // Value 4 when respond to user should run
+    PROMPT = 1 << 3      // Value 8 when prompt state should run
 };
 
 class LEDController
@@ -290,6 +291,7 @@ private:
   
     void run_dormant();
     void run_respond_to_user();
+    void run_prompt();
 };
 
 

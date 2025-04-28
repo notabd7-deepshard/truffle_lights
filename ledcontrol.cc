@@ -510,6 +510,10 @@ void LEDController::run(){
            run_respond_to_user();
            continue;
        }
+       else if(state.load(std::memory_order_relaxed) == LEDState::PROMPT){
+           run_prompt();
+           continue;
+       }
        // If neither dormant nor respond_to_user, then run active state
        matrix->Clear(leds);
 
@@ -870,5 +874,88 @@ void LEDController::run_respond_to_user(){
     update_leds();
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
 }
+
+void LEDController::run_prompt() {
+    static std::unique_ptr<LEDMatrix> prompt_matrix = std::make_unique<LEDMatrix>();
+    
+    // Static variables for animation state
+    static float angle = 0.0f;
+    static const float ROTATION_SPEED = 300.0f; // degrees per second - increased by 5x
+    static auto last_update = std::chrono::high_resolution_clock::now();
+    
+    // Create our single large orb with constant parameters
+    static polar_t orb_position = polar_t::Degrees(angle, 3); // Radius 3
+
+    // Clear matrix
+    prompt_matrix->Clear(leds); 
+
+    // Update rotation angle based on elapsed time (for smooth constant movement)
+    auto now = std::chrono::high_resolution_clock::now();
+    float elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_update).count();
+    last_update = now;
+    
+    // Apply rotation at constant speed (degrees per frame)
+    angle += (ROTATION_SPEED / 1000.0f) * elapsed_ms;
+    if (angle >= 360.0f) angle -= 360.0f;
+    
+    // Update orb position
+    orb_position = polar_t::Degrees(angle, 3);
+    
+    // Define HSV color and lighting parameters
+    HSV orbHSV = {0.0f, 0.0f, 1.0f}; 
+    float sigma = 3.5f;                  // blur radius (larger = bigger orb)
+    float intensity = 1.2f;              // global brightness (increased for better contrast)
+    
+    // First set all LEDs to 50% white (background)
+    for (int i = 0; i < LED_COUNT; ++i) {
+        leds[i] = led_color_t{0, 0, 0}; // 50% white (128/255 = 0.5 or 50%)
+    }
+    
+    // Calculate orb influence for each LED
+    std::vector<float> orb_influence(LED_COUNT, 0.0f);
+    float max_influence = 0.0f;
+    
+    for (int i = 0; i < LED_COUNT; ++i) {
+        polar_t p = led_lut[i];
+        
+        // Calculate distance metrics
+        float dθ = angularDifference(p.theta, orb_position.theta);
+        float r̄ = (p.r + orb_position.r) * 0.5f;
+        float Δr = p.r - orb_position.r;
+        
+        // Squared distance (for Gaussian)
+        float d2 = (dθ * r̄)*(dθ * r̄) + (Δr * Δr);
+        
+        // Gaussian falloff function
+        float F = std::exp(-d2 / (2 * sigma * sigma));
+        orb_influence[i] = F;
+        
+        if (F > max_influence) max_influence = F;
+    }
+    
+    // Apply colors based on influence
+    for (int i = 0; i < LED_COUNT; ++i) {
+        float F = orb_influence[i];
+        
+        // Calculate orb color with intensity falloff
+        led_color_t orb_color = hsv2rgb(orbHSV) * (intensity * F);
+        
+        // Blend with background based on influence
+        // Higher influence = more orb color, less background
+        float blend_factor = std::min(1.0f, F * 2.0f); // Scale influence for stronger effect
+        
+        // Weighted blend between background white and orb color
+        leds[i].r = static_cast<uint8_t>((1.0f - blend_factor) * 128 + blend_factor * orb_color.r);
+        leds[i].g = static_cast<uint8_t>((1.0f - blend_factor) * 128 + blend_factor * orb_color.g);
+        leds[i].b = static_cast<uint8_t>((1.0f - blend_factor) * 128 + blend_factor * orb_color.b);
+    }
+    
+    // Push to hardware
+    update_leds();
+    
+    // Smooth timing
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+}
+
 
 #endif
