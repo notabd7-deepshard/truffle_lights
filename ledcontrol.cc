@@ -519,11 +519,15 @@ public:
         SetOrigin(0.f, 0);
         leds.reserve(1 + LED_COUNT);
 
+        // Store all LEDs with their exact positions
         leds.push_back({ {0.f,0.f}, base_color });           // centre pixel always lit
 
-        for (int r = 1; r <= max_size; ++r)
-            for (int i = 0; i < ring_sizes[r]; ++i)
-                leds.push_back({ { DEG2RAD(ringunit(r,i)), float(r) }, min_color });
+        for (int r = 1; r <= max_size; ++r) {
+            for (int i = 0; i < ring_sizes[r]; ++i) {
+                float angle = DEG2RAD(ringunit(r,i));
+                leds.push_back({ { angle, float(r) }, min_color });
+            }
+        }
 
         start_time = std::chrono::high_resolution_clock::now();
         last_frame = start_time;
@@ -567,52 +571,49 @@ public:
             r_wave = max_size - (x / travel_ms * max_size);
         }
 
-        // Set center always lit with base blue color
-        set_ring(0, base_color);
+        // Set center always lit with base blue color (first LED)
+        leds[0].color = base_color;
         
-        // Define transition width (in ring units) for smoother edge
-        const float edge_width = 0.4f;
+        // Calculate gaussian sigma based on wave speed
+        // Smaller sigma = sharper edge, larger sigma = more spread
+        const float base_sigma = 0.35f; 
         
-        // Update all rings based on current wave radius
-        for (int r = 1; r <= max_size; ++r) {
+        // Transition width (distance from wave front where brightness changes)
+        float transition_width = base_sigma;
+        
+        // Update each LED individually based on distance from center
+        for (size_t i = 1; i < leds.size(); ++i) {
+            // Get LED's distance from center
+            float led_radius = leds[i].origin.r;
+            
+            // Calculate distance from wave front
+            float dist_from_wave = led_radius - r_wave;
+            
+            // Calculate brightness factor using gaussian-like falloff
+            float brightness;
             if (expanding) {
-                // When expanding: rings inside wave front are fully lit
-                if (r < r_wave - edge_width) {
-                    // Fully inside wave
-                    set_ring(r, base_color);
+                if (dist_from_wave > 0) {
+                    // LED is outside wave front - fade out
+                    brightness = expf(-dist_from_wave * dist_from_wave / (2.0f * transition_width * transition_width));
+                } else {
+                    // LED is inside wave front - fully lit
+                    brightness = 1.0f;
                 }
-                else if (r < r_wave + edge_width) {
-                    // Transition edge - smooth falloff
-                    float t = (r_wave + edge_width - r) / (edge_width * 2);
-                    t = std::max(0.0f, std::min(1.0f, t));
-                    // Apply easing function for sharper transition
-                    t = t * t * (3.0f - 2.0f * t); // Smoothstep function
-                    set_ring(r, base_color * t);
-                }
-                else {
-                    // Outside wave - dark
-                    set_ring(r, min_color);
+            } else {
+                if (dist_from_wave < 0) {
+                    // LED is inside wave front - fully lit
+                    brightness = 1.0f;
+                } else {
+                    // LED is outside wave front - fade out
+                    brightness = expf(-dist_from_wave * dist_from_wave / (2.0f * transition_width * transition_width));
                 }
             }
-            else {
-                // When contracting: rings outside wave front are dark
-                if (r <= r_wave - edge_width) {
-                    // Inside wave - fully lit
-                    set_ring(r, base_color);
-                }
-                else if (r <= r_wave + edge_width) {
-                    // Transition edge - smooth falloff
-                    float t = (r_wave + edge_width - r) / (edge_width * 2);
-                    t = std::max(0.0f, std::min(1.0f, t));
-                    // Apply easing function for sharper transition
-                    t = t * t * (3.0f - 2.0f * t); // Smoothstep function
-                    set_ring(r, base_color * t);
-                }
-                else {
-                    // Outside wave - dark
-                    set_ring(r, min_color);
-                }
-            }
+            
+            // Ensure brightness is in [0,1]
+            brightness = std::max(0.0f, std::min(1.0f, brightness));
+            
+            // Apply brightness to color
+            leds[i].color = min_color + ((base_color - min_color) * brightness);
         }
     }
 
@@ -624,13 +625,6 @@ private:
     led_color_t base_color, min_color;
     int max_size;
     std::chrono::time_point<std::chrono::high_resolution_clock> start_time, last_frame;
-
-    // colour every LED of a given ring
-    void set_ring(int ring, led_color_t c) {
-        int idx = 1;
-        for (int i = 1; i < ring; ++i) idx += ring_sizes[i];
-        for (int i = 0; i < ring_sizes[ring]; ++i) leds[idx+i].color = c;
-    }
 };
 
 //helper for ang diff
