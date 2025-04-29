@@ -292,6 +292,7 @@ private:
     void run_dormant();
     void run_respond_to_user();
     void run_prompt();
+    void run_active();
 };
 
 
