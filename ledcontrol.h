@@ -14,7 +14,28 @@
 #include <random>
 #include <exception>
 #include <stdexcept>
+#include <array>
+#include <cstring>
+#include <unistd.h>
 #include "spi.h"
+
+
+#define LED_COUNT 61
+
+struct LEDPxF {                      // linear-float 0‥1  (premultiplied)
+    float r, g, b;                   // colour energy
+    float v;                         // brightness scalar
+};
+using LEDFrame = std::array<LEDPxF, LED_COUNT>;
+
+template <typename T>
+inline T lerp(T a, T b, float t) {
+    return a + (b - a) * t;
+}
+
+inline float lerpf(float a, float b, float t) {
+    return a + (b - a) * t;
+}
 
 #define M_PI_F		((float)(M_PI))	
 #define RAD2DEG( x )  ( (float)(x) * (float)(180.f / M_PI_F) )
@@ -24,7 +45,6 @@
 //https://jetsonhacks.com/nvidia-jetson-agx-orin-gpio-header-pinout/
 //https://controllerstech.com/ws2812-leds-using-spi/
 
-#define LED_COUNT 61
 #define WS2812B_SPI_SPEED 2500000
 #define WS2812B_HIGH 0b11100000  //  WS2812 "1"
 #define WS2812B_LOW  0b10000000  //  WS2812 "0"
@@ -193,13 +213,6 @@ struct polar_t{
     }
 };
 
-inline void encode_color(uint8_t r, uint8_t g, uint8_t b, char* buffer) {
-    for (int i = 0; i < 8; i++) {
-        buffer[i] = (g & (1 << (7 - i))) ? WS2812B_HIGH : WS2812B_LOW;
-        buffer[8 + i] = (r & (1 << (7 - i))) ? WS2812B_HIGH : WS2812B_LOW;
-        buffer[16 + i] = (b & (1 << (7 - i))) ? WS2812B_HIGH : WS2812B_LOW;
-    }
-}
 inline void encode_color(const led_color_t& c, char* buffer) {
     for (int i = 0; i < 8; i++) {
         buffer[i] = (c.g & (1 << (7 - i))) ? WS2812B_HIGH : WS2812B_LOW;
@@ -247,7 +260,8 @@ enum class LEDState : uint8_t {
     DORMANT = 1,         // Value 1 when dormant should run
     ACTIVE = 1 << 1,     // Value 2 when active should run
     RESPOND_TO_USER = 1 << 2,  // Value 4 when respond to user should run
-    PROMPT = 1 << 3      // Value 8 when prompt state should run
+    PROMPT = 1 << 3,      // Value 8 when prompt state should run
+    ERROR = 1 << 4       // Value 16 when error state should run
 };
 
 
@@ -285,7 +299,7 @@ public:
         printf("Ring[%d] %d: %d - %d\n", index, led_count, start_idx, end_idx);
         
         for(auto& led : leds)
-            led = {125,125,125};// generate_random_color();
+            led = {125,125,125};
     }
 
     const int Count() const override { return led_count; }
@@ -334,6 +348,17 @@ public:
             std::make_unique<LEDRing<24>>(4),
         };
         set_all({0,0,0});
+    }
+
+    inline void sampleToFrame(LEDFrame& out) const
+    {
+        for (int i = 0; i < LED_COUNT; ++i) {
+            const led_color_t c = outLedCache_[i];   // see § B below
+            out[i].r = c.r / 255.f;
+            out[i].g = c.g / 255.f;
+            out[i].b = c.b / 255.f;
+            out[i].v = 1.f;
+        }
     }
 
     void Clear(LEDArray& leds, led_color_t clr = {0,0,0}){
@@ -396,12 +421,14 @@ public:
             ring->Update(leds);
         }
 
-
+        outLedCache_ = leds;        // ← keeps last colours for sampling
     }
 
 
     void set_led(float angle_deg, int radius, led_color_t color){
-        auto [ring, led] = polar_to_ring(angle_deg, radius);
+        std::pair<int, int> result = polar_to_ring(angle_deg, radius);
+        int ring = result.first;
+        int led = result.second;
         if(ring == 0xffff || led == 0xffff) {
             throw std::out_of_range("Invalid coords: " + std::to_string(angle_deg) + ", " + std::to_string(radius));
         }
@@ -414,7 +441,9 @@ public:
     }
 
     void set_led(polar_t coords, led_color_t color){
-        auto [ring, led] = polar_to_ring(coords);
+        std::pair<int, int> result = polar_to_ring(coords);
+        int ring = result.first;
+        int led = result.second;
         if(ring == 0xffff || led == 0xffff){
             printf("Invalid coords: %f, %f\n", RAD2DEG(coords.theta), coords.r);
             return;
@@ -433,14 +462,13 @@ public:
     
 protected:
     std::array<std::unique_ptr<LEDRingBase>, 5> rings;
+    std::array<led_color_t, LED_COUNT> outLedCache_;
 };
 
 struct animLED{
     polar_t origin;
     led_color_t color;
 
-   // animLED(polar_t origin, led_color_t color) : origin(origin), color(color) {}
-    //animLED() : color({0,0,0}) {}
 };
 
 class Animatable{
@@ -730,23 +758,18 @@ public:
         last_frame = start_time;
     }
 
-    // --------------------------------------------------------------------------
     void Update() override {
         auto now = std::chrono::high_resolution_clock::now();
 
-        // ~100 fps cap ----------------------------------------------------------
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_frame).count() < 10)
             return;
         last_frame = now;
 
-        // -------- fluid continuous motion timebase ------------------------------
         constexpr float full_cycle_ms = 6000.0f;      // total time for one complete cycle
         
-        // Calculate normalized time position in cycle [0.0 - 1.0]
         float t_norm = fmodf(float(std::chrono::duration_cast<std::chrono::milliseconds>
                                  (now - start_time).count()), full_cycle_ms) / full_cycle_ms;
         
-        // Use sine wave for smooth continuous oscillation (values between 0 and 1)
         float sin_t = (std::sin(t_norm * 2.0f * M_PI_F - M_PI_F/2.0f) + 1.0f) * 0.5f;
         
         // Calculate exact radius using smoothed sine wave
@@ -818,24 +841,68 @@ private:
 };
 
 
+class TransitionEngine {
+public:
+    void begin(const LEDFrame& from, const LEDFrame& to,
+               float duration_ms = 1200.f)
+    {
+        A = from;  B = to;  T = duration_ms;
+        t0 = std::chrono::high_resolution_clock::now();
+        active = true;
+    }
+
+    // blends into out[], returns true while active
+    bool blend(LEDFrame& out)
+    {
+        if (!active) return false;
+
+        float t = std::chrono::duration<float, std::milli>(
+                      std::chrono::high_resolution_clock::now() - t0).count() / T;
+        if (t >= 1.f) { out = B; active = false; return false; }
+
+        // cubic ease-in-out
+        float e = (t < .5f) ? 4.f*t*t*t
+                            : 1.f - powf(-2.f*t + 2.f, 3.f) / 2.f;
+
+        for (int i = 0; i < LED_COUNT; ++i) {
+            out[i].v = 1.0f;                       // keep full brightness
+            out[i].r = lerpf(A[i].r, B[i].r, e);
+            out[i].g = lerpf(A[i].g, B[i].g, e);
+            out[i].b = lerpf(A[i].b, B[i].b, e);
+        }
+        return true;
+    }
+
+private:
+    LEDFrame A, B;
+    std::chrono::high_resolution_clock::time_point t0;
+    float  T       = 0.f;
+    bool   active  = false;
+};
+
+
 class LEDController
 {
 public:
-    LEDController() : spi(WS2812B_SPI_SPEED) {
-        buildLUT();
-        if(spi.state == SPI_OPEN){
-            off();
-            control_thread = std::thread(&LEDController::run, this);
-        }
-        else puts("ledcontrol failed to init SPI");
-    }
+    LEDController();
     ~LEDController(){
         shutdown();
     }
 
     //void SetState(LEDState s) { state.store(s, std::memory_order_relaxed); }
 
-    void SetState(LEDState state) { this->state.store(state, std::memory_order_relaxed); }
+    void SetState(LEDState s)
+    {
+        pendingState_ = s;           // don't flip immediately
+    }
+
+    void renderSnapshot(LEDState s, LEDFrame& out);
+
+    void run_dormant(bool commit = true);
+    void run_respond_to_user(bool commit = true);
+    void run_prompt(bool commit = true);
+    void run_active(bool commit = true);
+    void run_error(bool commit = true);
 
 private:
     spi_t spi;
@@ -847,6 +914,13 @@ private:
     static_assert(LED_COUNT * 24 < SPI_BUFFER_SIZE );
     
     std::atomic<LEDState> state{LEDState::DORMANT};
+
+    TransitionEngine transition_;
+    LEDFrame         curF_{}, nextF_{}, blendedF_{};
+    LEDState         pendingState_ = LEDState::DORMANT;
+    bool             inTransition_ = false;
+
+    std::unique_ptr<LEDMatrix> liveMatrix_ = std::make_unique<LEDMatrix>();
 
     void buildLUT();
 
@@ -881,12 +955,6 @@ private:
             control_thread.join();
         puts("LEDController cleanly shutdown");
     }
-  
-    void run_dormant();
-    void run_respond_to_user();
-    void run_prompt();
-    void run_active();
-    void run_error();
 };
 
 

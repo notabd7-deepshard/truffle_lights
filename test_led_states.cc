@@ -19,6 +19,7 @@ void signal_handler(int signal) {
 
 int main() {
     std::cout << "Starting LED state test (Press Ctrl+C to exit)...\n";
+    std::cout << "Cycling through all LED states: PROMPT -> DORMANT -> ACTIVE -> RESPOND_TO_USER\n";
     
     // Set up signal handler for clean termination
     signal(SIGINT, signal_handler);
@@ -26,33 +27,42 @@ int main() {
     // Create instance of the controller
     LEDController ledController;
     
+    // For state cycling
+    const int state_duration_seconds = 5;
+    
     // Run continuously until interrupted
     while (running) {
-        //Start with dormant state
-        std::cout << "Setting DORMANT state for 15 seconds...\n";
-        ledController.SetState(LEDState::DORMANT);
-        std::this_thread::sleep_for(std::chrono::seconds(15));
-        if (!running) break;
-        
-        // Switch to active state
-        std::cout << "Setting ACTIVE state for 15 seconds...\n";
-        ledController.SetState(LEDState::ACTIVE);
-        std::this_thread::sleep_for(std::chrono::seconds(15));
-        if (!running) break;
-        
-        // Switch to respond-to-user state
-        std::cout << "Setting RESPOND_TO_USER state for 15 seconds...\n";
-        ledController.SetState(LEDState::RESPOND_TO_USER);
-        std::this_thread::sleep_for(std::chrono::seconds(15));
-        if (!running) break;
-        
-        // Switch to the new PROMPT state
-        std::cout << "Setting PROMPT state for 30 seconds...\n";
+        // 1. PROMPT state
+        std::cout << "Setting PROMPT state for " << state_duration_seconds << " seconds...\n";
         ledController.SetState(LEDState::PROMPT);
-        std::this_thread::sleep_for(std::chrono::seconds(30));
+        std::this_thread::sleep_for(std::chrono::seconds(state_duration_seconds));
         if (!running) break;
         
-        std::cout << "Completed one cycle, starting again...\n";
+        // 2. DORMANT state
+        std::cout << "Setting DORMANT state for " << state_duration_seconds << " seconds...\n";
+        ledController.SetState(LEDState::DORMANT);
+        std::this_thread::sleep_for(std::chrono::seconds(state_duration_seconds));
+        if (!running) break;
+        
+        // 3. ACTIVE state
+        std::cout << "Setting ACTIVE state for " << state_duration_seconds << " seconds...\n";
+        ledController.SetState(LEDState::ACTIVE);
+        std::this_thread::sleep_for(std::chrono::seconds(state_duration_seconds));
+        if (!running) break;
+        
+        // 4. RESPOND_TO_USER state
+        std::cout << "Setting RESPOND_TO_USER state for " << state_duration_seconds << " seconds...\n";
+        ledController.SetState(LEDState::RESPOND_TO_USER);
+        std::this_thread::sleep_for(std::chrono::seconds(state_duration_seconds));
+        if (!running) break;
+
+        // 5. ERROR state
+        std::cout << "Setting ERROR state for " << state_duration_seconds << " seconds...\n";
+        ledController.SetState(LEDState::ERROR);
+        std::this_thread::sleep_for(std::chrono::seconds(state_duration_seconds));
+        if (!running) break;
+        
+        std::cout << "Completed one full cycle through all states, starting again...\n";
     }
     
     // Ensure we end in dormant state when exiting

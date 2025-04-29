@@ -8,6 +8,18 @@
 #include <cmath>
 #include <algorithm>
 
+LEDController::LEDController() : spi(WS2812B_SPI_SPEED) {
+    buildLUT();
+    if(spi.state == SPI_OPEN){
+        off();
+        // Set initial state to PROMPT
+        state.store(LEDState::PROMPT, std::memory_order_relaxed);
+        puts("Starting in PROMPT state");
+        control_thread = std::thread(&LEDController::run, this);
+    }
+    else puts("ledcontrol failed to init SPI");
+}
+
 uint8_t generate_random_uint8() {
     static std::random_device rd;
     static std::mt19937 gen(rd());
@@ -40,8 +52,8 @@ void LEDController::buildLUT() {
     }
 }
 
-void LEDController::run_dormant() {
-    static std::unique_ptr<LEDMatrix> matrix = std::make_unique<LEDMatrix>();
+void LEDController::run_dormant(bool commit) {
+    auto* matrix = liveMatrix_.get();
     static Glow dormGlow(4, { 40,120,255 }, { 1,2,3 });   // size, base, min
 
     // clear back-buffer
@@ -49,17 +61,18 @@ void LEDController::run_dormant() {
 
     // animate & draw
     dormGlow.Update();
-    dormGlow.Draw(matrix.get());
+    dormGlow.Draw(matrix);
 
     // push to framebuffer & hardware
     matrix->Update(leds);
-    update_leds();
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(10)); // ~100 fps
+    if (commit) {
+        update_leds();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));   // fps-cap
+    }
 }
 
-void LEDController::run_active() {
-    static std::unique_ptr<LEDMatrix> matrix = std::make_unique<LEDMatrix>();
+void LEDController::run_active(bool commit) {
+    auto* matrix = liveMatrix_.get();
     static bool initialized = false;
     static std::vector<std::unique_ptr<Animatable>> scene;
     static std::vector<HSV> orbHSV;
@@ -190,7 +203,7 @@ void LEDController::run_active() {
     }
 
     // Push to hardware
-    update_leds();
+    if (commit) update_leds();
     
     // Update angle for next frame
     t -= 10.f;
@@ -198,8 +211,8 @@ void LEDController::run_active() {
     if(t > 360.f) t = 0.1f;
 }
 
-void LEDController::run_respond_to_user() {
-    static std::unique_ptr<LEDMatrix> matrix = std::make_unique<LEDMatrix>();
+void LEDController::run_respond_to_user(bool commit) {
+    auto* matrix = liveMatrix_.get();
     // Darker orange glow with orange undertone to ensure no green tint appears
     static Glow respondGlow(5, led_color_t{225, 100, 0}, led_color_t{25,10,0});  // Darker orange color
 
@@ -208,17 +221,18 @@ void LEDController::run_respond_to_user() {
 
     // Update the animation
     respondGlow.Update();
-    respondGlow.Draw(matrix.get());
+    respondGlow.Draw(matrix);
 
     // Push to framebuffer & hardware
     matrix->Update(leds);
-    update_leds();
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(10)); // ~100 fps
+    if (commit) {
+        update_leds();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));   // fps-cap
+    }
 }
 
-void LEDController::run_error() {
-    static std::unique_ptr<LEDMatrix> matrix = std::make_unique<LEDMatrix>();
+void LEDController::run_error(bool commit) {
+    auto* matrix = liveMatrix_.get();
     // Orange glow - vibrant orange color with very subtle red undertone
     static Glow respondGlow(5, led_color_t{255, 0, 0}, led_color_t{10,0,0});  // Red color
 
@@ -227,17 +241,18 @@ void LEDController::run_error() {
 
     // Update the animation
     respondGlow.Update();
-    respondGlow.Draw(matrix.get());
+    respondGlow.Draw(matrix);
 
     // Push to framebuffer & hardware
     matrix->Update(leds);
-    update_leds();
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(10)); // ~100 fps
+    if (commit) {
+        update_leds();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));   // fps-cap
+    }
 }
 
-void LEDController::run_prompt() {
-    static std::unique_ptr<LEDMatrix> prompt_matrix = std::make_unique<LEDMatrix>();
+void LEDController::run_prompt(bool commit) {
+    auto* matrix = liveMatrix_.get();
     
     // Static variables for animation state
     static float angle = 0.0f;
@@ -248,7 +263,7 @@ void LEDController::run_prompt() {
     static polar_t orb_position = polar_t::Degrees(angle, 3); // Radius 3
 
     // Clear matrix
-    prompt_matrix->Clear(leds); 
+    matrix->Clear(leds); 
 
     // Update rotation angle based on elapsed time (for smooth constant movement)
     auto now = std::chrono::high_resolution_clock::now();
@@ -312,10 +327,34 @@ void LEDController::run_prompt() {
     }
     
     // Push to hardware
-    update_leds();
-    
-    // Smooth timing
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    if (commit) {
+        update_leds();
+        // Smooth timing
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+}
+
+void LEDController::renderSnapshot(LEDState s, LEDFrame& out)
+{
+    // Render the requested state into the controller's LED buffer (leds)
+    switch (s) {
+        case LEDState::DORMANT:  run_dormant(false);       break;
+        case LEDState::PROMPT:   run_prompt(false);        break;
+        case LEDState::ACTIVE:   run_active(false);        break;
+        case LEDState::RESPOND_TO_USER: run_respond_to_user(false); break;
+        case LEDState::ERROR:    run_error(false);         break;
+        default:                 run_active(false);        break;
+    }
+
+    // Convert the current LED byte colours into a linear-float frame for the
+    // transition engine.  We map the 0‥255 integer channels to 0‥1 floats and
+    // keep full brightness (v = 1).
+    for (int i = 0; i < LED_COUNT; ++i) {
+        out[i].r = leds[i].r / 255.f;
+        out[i].g = leds[i].g / 255.f;
+        out[i].b = leds[i].b / 255.f;
+        out[i].v = 1.f;
+    }
 }
 
 void LEDController::run() {
@@ -325,20 +364,61 @@ void LEDController::run() {
     while(should_run.load(std::memory_order_relaxed)) {
         LEDState current_state = state.load(std::memory_order_relaxed);
         
+        // Check if there's a pending state change
+        if (pendingState_ != current_state && !inTransition_) {
+            printf("Starting transition from state %d to state %d\n", 
+                   static_cast<int>(current_state), static_cast<int>(pendingState_));
+            
+            // Set up smooth transition using the TransitionEngine
+            renderSnapshot(current_state, curF_);
+            renderSnapshot(pendingState_, nextF_);
+            transition_.begin(curF_, nextF_, 1000.0f); // 1 second transition
+            inTransition_ = true;
+            state.store(pendingState_, std::memory_order_relaxed);
+        }
+        
+        // Handle the transition if it's active
+        if (inTransition_) {
+            if (!transition_.blend(blendedF_)) {
+                // Transition complete
+                inTransition_ = false;
+                printf("Transition to state %d complete\n", 
+                       static_cast<int>(state.load(std::memory_order_relaxed)));
+            } else {
+                // Apply blended frame
+                auto toByte = [](float x){ return uint8_t(std::clamp(x*255.f,0.f,255.f)); };
+                
+                for (int i = 0; i < LED_COUNT; ++i) {
+                    leds[i].r = toByte(blendedF_[i].r * blendedF_[i].v);
+                    leds[i].g = toByte(blendedF_[i].g * blendedF_[i].v);
+                    leds[i].b = toByte(blendedF_[i].b * blendedF_[i].v);
+                }
+                update_leds();
+                continue; // Skip the normal rendering
+            }
+        }
+        
+        // Normal rendering for current state
         switch(current_state) {
             case LEDState::DORMANT:
-                run_dormant();
+                run_dormant(true);
                 break;
             case LEDState::RESPOND_TO_USER:
-                run_respond_to_user();
+                run_respond_to_user(true);
                 break;
             case LEDState::PROMPT:
-                run_prompt();
+                run_prompt(true);
+                break;
+            case LEDState::ERROR:
+                run_error(true);
                 break;
             default:
-                run_active();
+                run_active(true);
                 break;
         }
+        
+        // Consistent frame pacing for all states
+        std::this_thread::sleep_for(std::chrono::milliseconds(16)); // 60fps
     }
     
     puts("exit loop");
