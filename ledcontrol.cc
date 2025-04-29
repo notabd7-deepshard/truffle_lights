@@ -789,8 +789,8 @@ void LEDController::run_active() {
 
 void LEDController::run_respond_to_user() {
     static std::unique_ptr<LEDMatrix> matrix = std::make_unique<LEDMatrix>();
-    // Orange glow - vibrant orange color with very subtle red undertone
-    static Glow respondGlow(5, led_color_t{255, 140, 0}, led_color_t{10,5,0});  // Orange color
+    // Darker orange glow with orange undertone to ensure no green tint appears
+    static Glow respondGlow(5, led_color_t{225, 100, 0}, led_color_t{25,10,0});  // Darker orange color
 
     // Clear the matrix
     matrix->Clear(leds);
@@ -916,7 +916,7 @@ void LEDController::run() {
         
         switch(current_state) {
             case LEDState::DORMANT:
-                run_dormant();
+                run_prompt();
                 break;
             case LEDState::RESPOND_TO_USER:
                 run_respond_to_user();
