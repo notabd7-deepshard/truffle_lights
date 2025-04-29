@@ -519,12 +519,14 @@ static float angularDifference(float a, float b) {
 // Improved TransitionSpiral class with Gaussian blending
 class TransitionSpiral : public Animatable {
 public:
-    enum Phase { IN = 0, FLASH = 1, OUT = 2, DONE = 3 };
+    enum Phase { IN = 0, FUSION = 1, FLASH = 2, EXPANSION = 3, OUT = 4, DONE = 5 };
     
     // Duration constants for phases
-    static constexpr float T_in = 0.8f;     // Time for spiral in (seconds)
-    static constexpr float T_flash = 0.2f;  // Flash duration (seconds)
-    static constexpr float T_out = 0.8f;    // Time for spiral out (seconds)
+    static constexpr float T_in = 0.8f;         // Initial rotation phase
+    static constexpr float T_fusion = 0.5f;     // Fusion/spiral in phase 
+    static constexpr float T_flash = 0.2f;      // Flash at center
+    static constexpr float T_expansion = 0.5f;  // Expansion from center
+    static constexpr float T_out = 0.8f;        // Final rotation phase
     
     // Improved HSV interpolation function
     static HSV interpolateHSV(const HSV& a, const HSV& b, float t) {
@@ -561,7 +563,7 @@ public:
         sigma = {1.0f, 1.0f, 1.0f};       // Gaussian blur radius
         intensity = {0.9f, 0.9f, 0.9f};   // Intensity - higher than in active state
         
-        // initialize three Orb objects for spiral-in/out with initial colors
+        // Initialize orbs at 120 degrees apart at radius 3 (outer ring)
         for(int k = 0; k < 3; ++k) {
             // Start at radius 3 (standard outer orbit radius) for consistency
             orbs.emplace_back(std::make_unique<Orb>(4, hsv2rgb(hsv_from[k]), polar_t::Degrees(k * 120.f, 3)));
@@ -571,7 +573,15 @@ public:
             orbPtr->rot_speed = orb_speeds[k];
             orbPtr->max_speed = orb_speeds[k] * 1.2f;
         }
+        
+        // Set phase start times for timing progress
+        phase_start_time = std::chrono::high_resolution_clock::now();
         this->dt = 0.0f;
+        
+        // Record initial positions for animation
+        for (int i = 0; i < 3; i++) {
+            initial_positions.push_back(dynamic_cast<Orb*>(orbs[i].get())->GetOrigin());
+        }
     }
 
     // Add a method to get the current phase for debugging
@@ -579,9 +589,14 @@ public:
     
     // Add a method to get the normalized time within current phase
     float getNormalizedTime() const { 
-        return (phase == IN)  ? (t_phase / T_in)
-              : (phase == OUT) ? (t_phase / T_out)
-              : 1.0f;
+        switch (phase) {
+            case IN: return t_phase / T_in;
+            case FUSION: return t_phase / T_fusion;
+            case FLASH: return t_phase / T_flash;
+            case EXPANSION: return t_phase / T_expansion;
+            case OUT: return t_phase / T_out;
+            default: return 1.0f;
+        }
     }
 
     bool finished() const { return phase == DONE; }
@@ -594,83 +609,202 @@ public:
         t_phase += dt;
         
         // Update phase based on timing
+        bool phase_changed = false;
         switch(phase) {
             case IN:
-                if (t_phase >= T_in) { phase = FLASH; t_phase = 0.0f; }
+                if (t_phase >= T_in) { 
+                    phase = FUSION; 
+                    t_phase = 0.0f; 
+                    phase_changed = true;
+                }
+                break;
+            case FUSION:
+                if (t_phase >= T_fusion) { 
+                    phase = FLASH; 
+                    t_phase = 0.0f; 
+                    phase_changed = true;
+                }
                 break;
             case FLASH:
-                if (t_phase >= T_flash) { phase = OUT; t_phase = 0.0f; }
+                if (t_phase >= T_flash) { 
+                    phase = EXPANSION; 
+                    t_phase = 0.0f; 
+                    phase_changed = true;
+                }
+                break;
+            case EXPANSION:
+                if (t_phase >= T_expansion) { 
+                    phase = OUT; 
+                    t_phase = 0.0f; 
+                    phase_changed = true;
+                }
                 break;
             case OUT:
-                if (t_phase >= T_out) { phase = DONE; }
+                if (t_phase >= T_out) { 
+                    phase = DONE; 
+                    phase_changed = true;
+                }
                 break;
             default:
                 break;
         }
+        
+        if (phase_changed) {
+            phase_start_time = std::chrono::high_resolution_clock::now();
+        }
 
-        // Normalized time within the current phase (0-1)
-        float t_norm = (phase == IN)  ? (t_phase / T_in)
-                      : (phase == OUT) ? (t_phase / T_out)
-                      : 1.0f;
-                      
+        // Calculate overall transition progress (0.0 - 1.0)
+        float totalDuration = T_in + T_fusion + T_flash + T_expansion + T_out;
+        float elapsedTime = std::chrono::duration<float>(now - start).count();
+        float overallProgress = std::min(1.0f, elapsedTime / totalDuration);
+        
+        // Get normalized time within the current phase (0-1)
+        float t_norm = getNormalizedTime();
+        
         // Apply easing for smoother animation
         float e = easeInOut(t_norm);
+        
+        // Calculate distance between orbs for fusion effect
+        bool close_enough_for_fusion = false;
+        if (phase >= FUSION) {
+            close_enough_for_fusion = true;
+        } else if (phase == IN && t_norm > 0.7f) {
+            // During late IN phase, check if orbs are close enough
+            auto c0 = dynamic_cast<Orb*>(orbs[0].get())->GetOrigin();
+            auto c1 = dynamic_cast<Orb*>(orbs[1].get())->GetOrigin();
+            auto c2 = dynamic_cast<Orb*>(orbs[2].get())->GetOrigin();
+            
+            auto sep = [](const polar_t &a, const polar_t &b){
+                // Euclid dist in LED units
+                float dθ = angularDifference(a.theta, b.theta);
+                float r̄  = (a.r + b.r) * 0.5f;
+                float Δr  = a.r - b.r;
+                return sqrtf((dθ*r̄)*(dθ*r̄) + Δr*Δr);
+            };
+            
+            float sep01 = sep(c0, c1);
+            float sep12 = sep(c1, c2);
+            float sep20 = sep(c2, c0);
+            
+            close_enough_for_fusion = (sep01 < 0.5f && sep12 < 0.5f && sep20 < 0.5f);
+        }
 
         // Update each orb
         for(size_t k = 0; k < orbs.size(); ++k) {
             Orb* orb = dynamic_cast<Orb*>(orbs[k].get());
             
             // Base positioning based on phase
-            float start_angle = k * 120.f;
+            float start_angle = initial_positions[k].theta;
+            float current_radius = 3.0f;  // Default outer ring radius
+            float target_angle = start_angle;
+            float color_blend = 0.0f;     // How much to blend from source to target color
             
             if (phase == IN) {
-                // During IN phase: we spiral in and begin transition
-                // Start from outer radius and spiral in towards center
-                float r = mixf(3.0f, 0.0f, e);
+                // During IN phase: initial rotation where orbs move toward each other
+                // Create a dynamic rotational movement
+                float base_speed = orb_speeds[k] * 0.5f;
+                float angle_offset = base_speed * t_norm;
                 
-                // Create spiral effect with rotation as well as inward movement
-                float angle = start_angle + (1.0f - e) * 90.0f;
+                // Orbs start moving toward meeting point (gradually slowing down)
+                float meetingPoint = 0.0f;  // Center angle for all orbs to approach
+                float approach_factor = std::pow(t_norm, 2);  // Accelerates toward end
                 
-                // Set the orb position
-                polar_t newPos = polar_t::Degrees(angle, r);
-                newPos.normalize();
-                orb->SetOrigin(newPos);
+                // Blend from initial angle toward meeting point
+                target_angle = start_angle + angle_offset * (1.0f - approach_factor);
+                target_angle += (meetingPoint - start_angle) * approach_factor;
                 
-                // Start color transition during IN phase
-                HSV currentHSV = interpolateHSV(hsv_from[k], hsv_to[k], e * 0.4f);
-                orb->SetColor(hsv2rgb(currentHSV));
+                // Keep radius at 3.0 during most of IN phase
+                current_radius = 3.0f;
                 
-                // Update speeds for more dynamic movement
-                orb->rot_speed = mixf(orb_speeds[k], orb_speeds[k] * 0.3f, e);
+                // Begin color transition during IN phase (first 30%)
+                color_blend = 0.3f * t_norm;
             } 
+            else if (phase == FUSION) {
+                // During FUSION: orbs spiral inward to center
+                float spiral_factor = e;  // Ease-in-out for smoother spiral
+                
+                // Gradually reduce radius from 3.0 to 0.5
+                current_radius = mixf(3.0f, 0.5f, spiral_factor);
+                
+                // Increase rotation as orbs get closer to center
+                float rotation_speed = mixf(1.0f, 3.0f, spiral_factor);
+                target_angle = start_angle + rotation_speed * 120.0f * spiral_factor;
+                
+                // Continue color transition (30% to 60%)
+                color_blend = 0.3f + (0.3f * e);
+            }
+            else if (phase == FLASH) {
+                // During FLASH phase: orbs are at center, pulsing
+                current_radius = 0.2f;
+                
+                // Slight rotation at center
+                target_angle = start_angle + t_norm * 30.0f;
+                
+                // Mid-point of color transition (60%)
+                color_blend = 0.6f;
+            }
+            else if (phase == EXPANSION) {
+                // During EXPANSION: orbs spiral outward from center
+                float expansion_factor = e;
+                
+                // Gradually increase radius from 0.5 to 3.0
+                current_radius = mixf(0.5f, 3.0f, expansion_factor);
+                
+                // Rotation decreases as orbs move outward
+                float rotation_speed = mixf(3.0f, 1.0f, expansion_factor);
+                target_angle = start_angle + 150.0f + rotation_speed * 120.0f * (1.0f - expansion_factor);
+                
+                // Continue color transition (60% to 90%)
+                color_blend = 0.6f + (0.3f * e);
+            }
             else if (phase == OUT) {
-                // During OUT phase: spiral out from center with new colors
-                float r = mixf(0.0f, 3.0f, e);
+                // During OUT phase: orbs continue rotation at their final positions
+                // Create a dynamic rotational movement
+                float base_speed = orb_speeds[k] * 0.5f;
+                float angle_offset = base_speed * t_norm;
                 
-                // Create spiral effect with rotation during outward movement
-                float angle = start_angle + e * 90.0f;
+                // Target positions for each orb (120 degrees apart)
+                float targetAngle = k * 120.0f;
+                float approach_factor = std::pow(t_norm, 2);  // Accelerates toward end
                 
-                // Set the orb position
-                polar_t newPos = polar_t::Degrees(angle, r);
-                newPos.normalize();
-                orb->SetOrigin(newPos);
+                // Blend from current angle toward final position
+                target_angle = (start_angle + 270.0f) + angle_offset * (1.0f - approach_factor);
+                target_angle += (targetAngle - (start_angle + 270.0f)) * approach_factor;
                 
-                // Complete color transition during OUT phase
-                HSV currentHSV = interpolateHSV(hsv_from[k], hsv_to[k], 0.4f + (e * 0.6f));
-                orb->SetColor(hsv2rgb(currentHSV));
+                // Keep radius at 3.0 during OUT phase
+                current_radius = 3.0f;
                 
-                // Update speeds for more dynamic movement
-                orb->rot_speed = mixf(orb_speeds[k] * 0.3f, orb_speeds[k], e);
+                // Complete color transition (90% to 100%)
+                color_blend = 0.9f + (0.1f * t_norm);
             }
             
-            if (phase == FLASH) {
-                // During flash we collapse all orbs to center position
-                orb->SetOrigin(polar_t::Degrees(start_angle, 0.1f));
-                
-                // Interpolate colors at midpoint of transition
-                HSV flashHSV = interpolateHSV(hsv_from[k], hsv_to[k], 0.5f);
-                flashHSV.v = 1.0f; // Max brightness
-                orb->SetColor(hsv2rgb(flashHSV));
+            // Normalize angle to valid range
+            while (target_angle >= 360.0f) target_angle -= 360.0f;
+            while (target_angle < 0.0f) target_angle += 360.0f;
+            
+            // Special case for FUSION phase: check if orbs should spiral inward
+            if (phase == IN && close_enough_for_fusion && t_norm > 0.8f) {
+                // Begin spiral toward center
+                float spiral_progress = (t_norm - 0.8f) / 0.2f;
+                current_radius = mixf(current_radius, 1.0f, spiral_progress);
+            }
+            
+            // Set the orb position
+            polar_t newPos = polar_t::Degrees(target_angle, current_radius);
+            newPos.normalize();
+            orb->SetOrigin(newPos);
+            
+            // Update the orb color based on transition progress
+            HSV currentHSV = interpolateHSV(hsv_from[k], hsv_to[k], color_blend);
+            orb->SetColor(hsv2rgb(currentHSV));
+            
+            // Update speeds for dynamics
+            if (phase == FUSION || phase == EXPANSION) {
+                // Faster speed during fusion/expansion
+                orb->rot_speed = orb_speeds[k] * 1.2f;
+            } else {
+                // Normal speed during other phases
+                orb->rot_speed = orb_speeds[k];
             }
         }
     }
@@ -693,20 +827,30 @@ public:
                 flashIntensity = 1.0f - ((t_phase - T_flash * 0.5f) / (T_flash * 0.5f));
             }
             
-            // Create a bright white/color blend
+            // Create a bright white/color blend with subtle color hints
             for (int i = 0; i < LED_COUNT; ++i) {
-                leds[i] = {
-                    static_cast<uint8_t>(220 * flashIntensity), 
-                    static_cast<uint8_t>(220 * flashIntensity), 
-                    static_cast<uint8_t>(220 * flashIntensity)
-                };
+                // Get a blend of all three orb colors for a richer flash effect
+                led_color_t base_color1 = dynamic_cast<Orb*>(orbs[0].get())->color;
+                led_color_t base_color2 = dynamic_cast<Orb*>(orbs[1].get())->color;
+                led_color_t base_color3 = dynamic_cast<Orb*>(orbs[2].get())->color;
+                
+                // Average the colors and add white for flash
+                uint8_t r = static_cast<uint8_t>((base_color1.r + base_color2.r + base_color3.r) / 3);
+                uint8_t g = static_cast<uint8_t>((base_color1.g + base_color2.g + base_color3.g) / 3);
+                uint8_t b = static_cast<uint8_t>((base_color1.b + base_color2.b + base_color3.b) / 3);
+                
+                // Blend with white for flash effect
+                r = static_cast<uint8_t>(r * 0.3f + 255 * 0.7f * flashIntensity);
+                g = static_cast<uint8_t>(g * 0.3f + 255 * 0.7f * flashIntensity);
+                b = static_cast<uint8_t>(b * 0.3f + 255 * 0.7f * flashIntensity);
+                
+                leds[i] = {r, g, b};
             }
             
-            // Update hardware immediately
             return;
         }
         
-        // For IN and OUT phases, use the Gaussian blending from run() function
+        // For all other phases, use the Gaussian blending from run() function
         // Reset the LED buffer for this frame
         for (int i = 0; i < LED_COUNT; ++i) {
             leds[i] = {0, 0, 0};
@@ -747,11 +891,13 @@ private:
     std::vector<float> orb_speeds;
     std::vector<float> sigma;        // Gaussian blur radius for each orb
     std::vector<float> intensity;    // Intensity multiplier for each orb
+    std::vector<polar_t> initial_positions; // Store initial positions
     
     Phase phase;
     float t_phase;
     float dt;
     std::chrono::time_point<std::chrono::high_resolution_clock> last_update;
+    std::chrono::time_point<std::chrono::high_resolution_clock> phase_start_time;
 };
 
 void LEDController::run_transition(LEDMatrix* matrix) {
