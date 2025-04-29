@@ -542,41 +542,28 @@ public:
             return;
         last_frame = now;
 
-        // -------- master timebase (3x slower) ---------------------------------
-        constexpr float travel_ms = 3600.0f;          // outward/inward time (3x slower)
-        constexpr float hold_ms   = 500.0f;           // pause at ends
-        const    float cycle_ms   = 2*travel_ms + 2*hold_ms;
-
-        float t_ms = fmodf(float(std::chrono::duration_cast<std::chrono::milliseconds>
-                                 (now - start_time).count()), cycle_ms);
-
-        // Calculate exact radius - linear interpolation for uniform speed
-        float r_wave;                                 // current wave radius [0,max]
-        bool expanding = false;
+        // -------- fluid continuous motion timebase ------------------------------
+        constexpr float full_cycle_ms = 6000.0f;      // total time for one complete cycle
         
-        if (t_ms < hold_ms) {
-            r_wave = 0.0f;                           // initial hold
-        }
-        else if (t_ms < hold_ms + travel_ms) {
-            // Expanding phase - linear interpolation
-            r_wave = (t_ms - hold_ms) / travel_ms * max_size;
-            expanding = true;
-        }
-        else if (t_ms < hold_ms + travel_ms + hold_ms) {
-            r_wave = max_size;                       // hold at maximum
-        }
-        else {
-            // Contracting phase - linear interpolation
-            float x = t_ms - (hold_ms + travel_ms + hold_ms);
-            r_wave = max_size - (x / travel_ms * max_size);
-        }
+        // Calculate normalized time position in cycle [0.0 - 1.0]
+        float t_norm = fmodf(float(std::chrono::duration_cast<std::chrono::milliseconds>
+                                 (now - start_time).count()), full_cycle_ms) / full_cycle_ms;
+        
+        // Use sine wave for smooth continuous oscillation (values between 0 and 1)
+        float sin_t = (std::sin(t_norm * 2.0f * M_PI_F - M_PI_F/2.0f) + 1.0f) * 0.5f;
+        
+        // Calculate exact radius using smoothed sine wave
+        float r_wave = sin_t * max_size;                // current wave radius [0,max]
+        
+        // Determine direction (expanding/contracting) from derivative of sine
+        bool expanding = std::cos(t_norm * 2.0f * M_PI_F - M_PI_F/2.0f) > 0;
 
         // Set center always lit with base blue color (first LED)
         leds[0].color = base_color;
         
         // Calculate gaussian sigma based on wave speed
         // Smaller sigma = sharper edge, larger sigma = more spread
-        const float base_sigma = 0.35f; 
+        const float base_sigma = 0.65f; // Increased from 0.35 for smoother gradation
         
         // Transition width (distance from wave front where brightness changes)
         float transition_width = base_sigma;
@@ -586,33 +573,59 @@ public:
             // Get LED's distance from center
             float led_radius = leds[i].origin.r;
             
-            // Calculate distance from wave front
+            // Calculate distance from wave front (with slight offset for smoother transition between integer rings)
             float dist_from_wave = led_radius - r_wave;
             
-            // Calculate brightness factor using gaussian-like falloff
+            // Calculate brightness factor using gaussian-like falloff with extra smoothing
             float brightness;
             if (expanding) {
                 if (dist_from_wave > 0) {
-                    // LED is outside wave front - fade out
+                    // LED is outside wave front - fade out with smoother falloff
                     brightness = expf(-dist_from_wave * dist_from_wave / (2.0f * transition_width * transition_width));
+                    
+                    // Add extra smooth falloff for subtle gradient
+                    float ring_fraction = led_radius - floorf(led_radius);
+                    brightness *= (0.95f + 0.05f * sinf(ring_fraction * M_PI_F));
                 } else {
-                    // LED is inside wave front - fully lit
+                    // LED is inside wave front - fully lit with subtle gradient
                     brightness = 1.0f;
+                    
+                    // Add subtle gradient variation to inside area for extra smoothness
+                    float inner_gradient = std::min(1.0f, std::max(0.0f, (r_wave - led_radius) / 0.5f));
+                    brightness = 0.98f + 0.02f * inner_gradient;
                 }
             } else {
                 if (dist_from_wave < 0) {
-                    // LED is inside wave front - fully lit
+                    // LED is inside wave front - fully lit with subtle gradient
                     brightness = 1.0f;
+                    
+                    // Add subtle gradient variation to inside area for extra smoothness
+                    float inner_gradient = std::min(1.0f, std::max(0.0f, (led_radius - r_wave + max_size) / 0.5f));
+                    brightness = 0.98f + 0.02f * inner_gradient;
                 } else {
-                    // LED is outside wave front - fade out
+                    // LED is outside wave front - fade out with smoother falloff
                     brightness = expf(-dist_from_wave * dist_from_wave / (2.0f * transition_width * transition_width));
+                    
+                    // Add extra smooth falloff for subtle gradient
+                    float ring_fraction = led_radius - floorf(led_radius);
+                    brightness *= (0.95f + 0.05f * sinf(ring_fraction * M_PI_F));
                 }
+            }
+            
+            // Apply subtle smoothstep to further smooth the transition
+            if (brightness < 1.0f && brightness > 0.0f) {
+                // Apply smoothstep - makes transition more natural at the edges
+                brightness = brightness * brightness * (3.0f - 2.0f * brightness);
             }
             
             // Ensure brightness is in [0,1]
             brightness = std::max(0.0f, std::min(1.0f, brightness));
             
-            // Apply brightness to color
+            // Apply brightness to color with subtle angular variation for more natural look
+            float angle_variation = 1.0f + 0.02f * sinf(leds[i].origin.theta * 4.0f);
+            brightness *= angle_variation;
+            
+            // Blend between min_color and base_color based on brightness
             leds[i].color = min_color + ((base_color - min_color) * brightness);
         }
     }
