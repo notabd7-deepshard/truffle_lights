@@ -787,131 +787,42 @@ void LEDController::run_active() {
     if(t > 360.f) t = 0.1f;
 }
 
-// Commented out state handlers (keeping as placeholders)
-/*
-
-void LEDController::run_respond_to_user(){
-    static std::unique_ptr<LEDMatrix> respond_matrix = std::make_unique<LEDMatrix>();
+void LEDController::run_respond_to_user() {
+    static std::unique_ptr<LEDMatrix> matrix = std::make_unique<LEDMatrix>();
+    // Orange glow - vibrant orange color with very subtle red undertone
     static Glow respondGlow(5, led_color_t{255, 140, 0}, led_color_t{10,5,0});  // Orange color
-    
-    // Clear the LED buffer
-    respond_matrix->Clear(leds);
-    
-    // Update the glow animation timing
-    respondGlow.Update();
-    
-    // Get animation parameters
-    float current_size = respondGlow.current_size;
-    float max_size = static_cast<float>(respondGlow.max_size);
-    float animation_phase = current_size / max_size;  // 0-1 through the cycle
-    led_color_t base_color = respondGlow.base_color;
-    led_color_t min_color = respondGlow.min_color;
-    bool is_expanding = respondGlow.inc > 0;
-    
-    // Constant dim core intensity to match at beginning and end of cycle
-    const float dim_core_intensity = 0.25f;
-    
-    // Keep track of cycle transition points
-    static bool in_transition = false;
-    static float transition_progress = 0.0f;
-    const float transition_threshold = 0.1f; // Size threshold to consider in transition
 
-    // Detect cycle transition points
-    if (current_size < transition_threshold) {
-        in_transition = true;
-        transition_progress = current_size / transition_threshold;
-    } else if (in_transition && current_size >= transition_threshold) {
-        in_transition = false;
-    }
-    
-    // CRITICAL: Set center ring first to ensure it's always on regardless of animation phase
-    // This guarantees the center never turns off during any state
-    respondGlow.set_ring(0, min_color + ((base_color - min_color) * dim_core_intensity));
-    
-    // For each ring, calculate its brightness
-    for (int ring = 0; ring < 5; ring++) {
-        // Skip center ring as we've already set it to ensure it's always on
-        if (ring == 0) continue;
-        
-        float intensity = 0.0f;
-        
-        if (is_expanding) {
-            // EXPANSION PHASE: smooth wave of light moving outward
-            // Calculate how far the wave has progressed through this ring
-            float wave_position = current_size - static_cast<float>(ring);
-            
-            // Create a window function for smooth transition (0->1->0)
-            // Use a smoothstep-like function for more natural transitions
-            if (wave_position >= -1.0f && wave_position <= 1.0f) {
-                // Smooth transition as wave passes through ring (0->1)
-                float t = (wave_position + 1.0f) * 0.5f; // normalize to 0-1
-                // Smoothstep function: 3t² - 2t³ (smoother than linear)
-                intensity = t * t * (3.0f - 2.0f * t);
-            } else if (wave_position > 1.0f) {
-                // After wave has passed, maintain a glow that fades with distance
-                intensity = 1.0f - std::min(0.5f, (wave_position - 1.0f) * 0.1f);
-            }
-        } else {
-            // CONTRACTION PHASE: smooth wave of darkness moving inward
-            
-            // During contraction, we want rings to gradually dim from outside to inside
-            // Normalize current_size to go from max_size to 0
-            float contraction_progress = current_size / max_size;
-            
-            // Calculate normalized ring position (0 = center, 1 = outermost)
-            float ring_position = static_cast<float>(ring) / (max_size - 1.0f);
-            
-            // Calculate how far the dimming wave has progressed relative to this ring
-            // Negative means ring is ahead of the wave (still bright)
-            // Positive means wave has passed this ring (dimming/dimmed)
-            float dimming_factor = ring_position - contraction_progress;
-            
-            // Apply a smooth curve for dimming transition
-            // We want a value that goes from 1.0 (fully lit) to dim_core_intensity (mostly dimmed)
-            if (dimming_factor <= 0.0f) {
-                // Ring is ahead of the wave - still fully illuminated
-                intensity = 1.0f;
-            } else if (dimming_factor > 0.0f && dimming_factor < 0.5f) {
-                // Ring is being dimmed by the wave - smooth transition
-                // Use cubic ease-out function for gentle dimming start with accelerated falloff
-                float t = dimming_factor / 0.5f; // normalize to 0-1
-                intensity = 1.0f - (t * t * t); // cubic falloff
-            } else {
-                // Ring is well behind the wave - maintain a minimal glow
-                // that gradually fades to the minimum as we approach the center
-                float remaining = 0.15f * (1.0f - std::min(1.0f, (dimming_factor - 0.5f) * 2.0f));
-                intensity = remaining;
-            }
-        }
-        
-        // Apply natural distance falloff from center
-        float distance_falloff = 1.0f - (ring * 0.1f);
-        intensity *= distance_falloff;
-        
-        // Apply easing at extremes of the animation for smooth cycle transition
-        if (current_size < 0.5f || current_size > (max_size - 0.5f)) {
-            // Ease intensity changes at the start/end of cycle
-            float cycle_transition = std::min(current_size, max_size - current_size) * 2.0f;
-            float transition_ease = cycle_transition * cycle_transition * 0.25f + 0.75f;
-            
-            // Apply transition easing where appropriate
-            if ((!is_expanding && ring == 4)) {
-                intensity *= transition_ease;
-            }
-        }
-        
-        // Apply intensity to color without gamma correction
-        led_color_t ring_color = min_color + ((base_color - min_color) * intensity);
-        
-        // Set the calculated color for this ring
-        respondGlow.set_ring(ring, ring_color);
-    }
-    
-    // Draw to matrix and update LEDs
-    respondGlow.Draw(respond_matrix.get());
-    respond_matrix->Update(leds);
+    // Clear the matrix
+    matrix->Clear(leds);
+
+    // Update the animation
+    respondGlow.Update();
+    respondGlow.Draw(matrix.get());
+
+    // Push to framebuffer & hardware
+    matrix->Update(leds);
     update_leds();
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(10)); // ~100 fps
+}
+
+void LEDController::run_error() {
+    static std::unique_ptr<LEDMatrix> matrix = std::make_unique<LEDMatrix>();
+    // Orange glow - vibrant orange color with very subtle red undertone
+    static Glow respondGlow(5, led_color_t{255, 0, 0}, led_color_t{10,0,0});  // Red color
+
+    // Clear the matrix
+    matrix->Clear(leds);
+
+    // Update the animation
+    respondGlow.Update();
+    respondGlow.Draw(matrix.get());
+
+    // Push to framebuffer & hardware
+    matrix->Update(leds);
+    update_leds();
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(10)); // ~100 fps
 }
 
 void LEDController::run_prompt() {
@@ -988,8 +899,13 @@ void LEDController::run_prompt() {
         leds[i].g = static_cast<uint8_t>((1.0f - blend_factor) * 128 + blend_factor * orb_color.g);
         leds[i].b = static_cast<uint8_t>((1.0f - blend_factor) * 128 + blend_factor * orb_color.b);
     }
-
-*/
+    
+    // Push to hardware
+    update_leds();
+    
+    // Smooth timing
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+}
 
 void LEDController::run() {
     update_leds();
@@ -1002,14 +918,12 @@ void LEDController::run() {
             case LEDState::DORMANT:
                 run_dormant();
                 break;
-            /*
             case LEDState::RESPOND_TO_USER:
                 run_respond_to_user();
                 break;
             case LEDState::PROMPT:
                 run_prompt();
                 break;
-            */
             default:
                 run_active();
                 break;
