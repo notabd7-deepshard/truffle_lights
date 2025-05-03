@@ -18,8 +18,8 @@ void signal_handler(int signal) {
 }
 
 int main() {
-    std::cout << "Starting LED state test (Press Ctrl+C to exit)...\n";
-    std::cout << "Cycling through all LED states: PROMPT -> DORMANT -> ACTIVE -> RESPOND_TO_USER\n";
+    std::cout << "Starting LED state test ...\n";
+    std::cout << "Cycling through all LED states: PROMPT -> DORMANT -> ACTIVE -> RESPOND_TO_USER -> PROCESSING -> ERROR\n";
     
     // Set up signal handler for clean termination
     signal(SIGINT, signal_handler);
@@ -56,7 +56,13 @@ int main() {
         std::this_thread::sleep_for(std::chrono::seconds(state_duration_seconds));
         if (!running) break;
 
-        // 5. ERROR state
+        // 5. PROCESSING state
+        std::cout << "Setting PROCESSING state for " << state_duration_seconds << " seconds...\n";
+        ledController.SetState(LEDState::PROCESSING);
+        std::this_thread::sleep_for(std::chrono::seconds(state_duration_seconds));
+        if (!running) break;
+
+        // 6. ERROR state
         std::cout << "Setting ERROR state for " << state_duration_seconds << " seconds...\n";
         ledController.SetState(LEDState::ERROR);
         std::this_thread::sleep_for(std::chrono::seconds(state_duration_seconds));

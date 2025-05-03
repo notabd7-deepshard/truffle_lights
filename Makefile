@@ -1,4 +1,3 @@
-
 EXE:=ledtest
 
 .PHONY: all
@@ -27,3 +26,12 @@ stop:
 .PHONY: start
 start:
 	sudo systemctl start truffle.service
+
+# Build test program cycling through all states
+STATE_TEST:=led_state_test
+
+$(STATE_TEST): ledcontrol.cc test_led_states.cc
+	g++ -I. ledcontrol.cc test_led_states.cc -o $(STATE_TEST) -pthread
+
+.PHONY: state_test
+state_test: $(STATE_TEST)

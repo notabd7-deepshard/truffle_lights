@@ -334,6 +334,115 @@ void LEDController::run_prompt(bool commit) {
     }
 }
 
+void LEDController::run_processing(bool commit)
+{
+    auto *matrix = liveMatrix_.get();
+    // Persistent state across frames
+    static bool              initialised   = false;
+    static std::chrono::high_resolution_clock::time_point t0;
+    static constexpr int     kMaxOrbs      = 3;
+    static std::array<float, kMaxOrbs>     spawnDelayMs = { 0.f, 1500.f, 3000.f };  // staggered starts
+    static std::array<float, kMaxOrbs>     speedMul     = { 1.0f, 1.4f, 1.8f };     // later → faster
+    static std::array<HSV,   kMaxOrbs>     orbHSV       = {
+        HSV{245.f, 0.8f, 1.f},                     // white-ish
+        HSV{ 40.f, 0.8f, 1.f},                     // blue
+        HSV{240.f, 0.8f, 1.f}                      // magenta
+    };
+
+    // Gaussian parameters for light contribution
+    static std::array<float, kMaxOrbs>     sigma       = { 1.5f, 1.5f, 1.5f };
+    static std::array<float, kMaxOrbs>     intensity   = { 1.0f, 1.0f, 1.0f };
+
+    static bool fused = false;              // set once all orbs reach the centre
+    static std::chrono::high_resolution_clock::time_point fusedTime;
+    static Glow postGlow(4, led_color_t{40, 120, 255}, led_color_t{1,2,3});
+
+    if (!initialised) {
+        initialised = true;
+        fused       = false;
+        t0          = std::chrono::high_resolution_clock::now();
+    }
+
+    // Orb positions (re-computed every frame)
+    std::vector<polar_t> orbPos;
+    std::vector<int>     activeIdx;         // keep which orb is which
+
+    constexpr float startRadius = 3.5f;
+    constexpr float spiralDurationMs = 4000.f;      // time for edge→centre
+    constexpr float totalRevs       = 3.0f;         // number of full circles while spiralling in
+
+    // Determine which orbs are active and compute their positions
+    for (int i = 0; i < kMaxOrbs; ++i) {
+        float localT = std::chrono::duration<float,std::milli>(std::chrono::high_resolution_clock::now() - t0).count() - spawnDelayMs[i];
+        if (localT < 0.f) continue;                  // not spawned yet
+
+        float tNorm = std::clamp(localT / spiralDurationMs, 0.f, 1.f);
+
+        // radius decreases linearly to centre
+        float r = mixf(startRadius, 0.f, tNorm);
+
+        // angle advances clockwise – faster for later orbs
+        float theta = -DEG2RAD(360.f * totalRevs * tNorm * speedMul[i]);
+
+        orbPos.push_back( polar_t{ theta, r } );
+        activeIdx.push_back(i);
+    }
+
+    // After all orbs spawned & reached centre → flag fusion
+    if (orbPos.size() == kMaxOrbs) {
+        bool allCentre = true;
+        for (auto &p : orbPos) if (p.r > 0.1f) { allCentre = false; break; }
+        if (allCentre) {
+            fused     = true;
+            fusedTime = std::chrono::high_resolution_clock::now();
+        }
+    }
+
+    // Zero framebuffer directly (don't affect matrix rings)
+    for (int i = 0; i < LED_COUNT; ++i) leds[i] = {0,0,0};
+
+    // Blend contributions from each active orb (gaussian fall-off)
+    for (size_t idx = 0; idx < orbPos.size(); ++idx) {
+        int orbIdx = activeIdx[idx];
+        polar_t C  = orbPos[idx];
+
+        for (int i = 0; i < LED_COUNT; ++i) {
+            polar_t P = led_lut[i];
+
+            float dθ = angularDifference(P.theta, C.theta);
+            float r̄  = (P.r + C.r) * 0.5f;
+            float Δr  = P.r - C.r;
+            float d2 = (dθ*r̄)*(dθ*r̄) + (Δr*Δr);
+
+            float F = expf(-d2 / (2.f * sigma[orbIdx] * sigma[orbIdx]));
+
+            led_color_t base = hsv2rgb(orbHSV[orbIdx]);
+            led_color_t contrib = base * (intensity[orbIdx] * F);
+
+            leds[i] = leds[i] + contrib;      // additive with clamping
+        }
+    }
+
+    // If fusion completed → just run glow afterwards
+    if (fused) {
+        // Draw glow using matrix helpers
+        matrix->Clear(leds);
+        postGlow.Update();
+        postGlow.Draw(matrix);
+        matrix->Update(leds);
+        if (commit) {
+            update_leds();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return;
+    }
+
+    // Push frame directly to hardware
+    if (commit) {
+        update_leds();
+    }
+}
+
 void LEDController::renderSnapshot(LEDState s, LEDFrame& out)
 {
     // Render the requested state into the controller's LED buffer (leds)
@@ -343,6 +452,7 @@ void LEDController::renderSnapshot(LEDState s, LEDFrame& out)
         case LEDState::ACTIVE:   run_active(false);        break;
         case LEDState::RESPOND_TO_USER: run_respond_to_user(false); break;
         case LEDState::ERROR:    run_error(false);         break;
+        case LEDState::PROCESSING: run_processing(false);  break;
         default:                 run_active(false);        break;
     }
 
@@ -364,38 +474,52 @@ void LEDController::run() {
     while(should_run.load(std::memory_order_relaxed)) {
         LEDState current_state = state.load(std::memory_order_relaxed);
         
-        // Check if there's a pending state change
+        // ─── Pending state change → start a new cross-fade ────────────────────
         if (pendingState_ != current_state && !inTransition_) {
             printf("Starting transition from state %d to state %d\n", 
                    static_cast<int>(current_state), static_cast<int>(pendingState_));
-            
-            // Set up smooth transition using the TransitionEngine
-            renderSnapshot(current_state, curF_);
-            renderSnapshot(pendingState_, nextF_);
-            transition_.begin(curF_, nextF_, 1000.0f); // 1 second transition
+
+            transitionFrom_   = current_state;
+            transitionTo_     = pendingState_;
+            transitionStart_  = std::chrono::high_resolution_clock::now();
+            transitionDurationMs_ = 1200.f; // slightly longer default; tweak as needed
+
             inTransition_ = true;
-            state.store(pendingState_, std::memory_order_relaxed);
         }
-        
-        // Handle the transition if it's active
+
+        // ─── Blend the two states while in transition ────────────────────────
         if (inTransition_) {
-            if (!transition_.blend(blendedF_)) {
-                // Transition complete
+            using clk = std::chrono::high_resolution_clock;
+            float t = std::chrono::duration<float,std::milli>(clk::now() - transitionStart_).count() / transitionDurationMs_;
+
+            if (t >= 1.0f) {
+                // Transition finished – lock in the new state
                 inTransition_ = false;
-                printf("Transition to state %d complete\n", 
-                       static_cast<int>(state.load(std::memory_order_relaxed)));
-            } else {
-                // Apply blended frame
-                auto toByte = [](float x){ return uint8_t(std::clamp(x*255.f,0.f,255.f)); };
-                
-                for (int i = 0; i < LED_COUNT; ++i) {
-                    leds[i].r = toByte(blendedF_[i].r * blendedF_[i].v);
-                    leds[i].g = toByte(blendedF_[i].g * blendedF_[i].v);
-                    leds[i].b = toByte(blendedF_[i].b * blendedF_[i].v);
-                }
-                update_leds();
-                continue; // Skip the normal rendering
+                state.store(transitionTo_, std::memory_order_relaxed);
+                printf("Transition to state %d complete\n", static_cast<int>(transitionTo_));
+                continue; // Next loop will render normally
             }
+
+            // Easing curve (cubic ease-in-out)
+            float e = (t < .5f) ? 4.f*t*t*t : 1.f - powf(-2.f*t + 2.f, 3.f) / 2.f;
+
+            // Render fresh snapshots so both states keep animating
+            renderSnapshot(transitionFrom_, curF_);
+            renderSnapshot(transitionTo_,   nextF_);
+
+            // Blend and write into leds
+            auto toByte = [](float x){ return uint8_t(std::clamp(x*255.f,0.f,255.f)); };
+            for (int i = 0; i < LED_COUNT; ++i) {
+                float r = lerpf(curF_[i].r, nextF_[i].r, e);
+                float g = lerpf(curF_[i].g, nextF_[i].g, e);
+                float b = lerpf(curF_[i].b, nextF_[i].b, e);
+
+                leds[i].r = toByte(r);
+                leds[i].g = toByte(g);
+                leds[i].b = toByte(b);
+            }
+            update_leds();
+            continue; // Skip the normal per-state rendering this frame
         }
         
         // Normal rendering for current state
@@ -411,6 +535,9 @@ void LEDController::run() {
                 break;
             case LEDState::ERROR:
                 run_error(true);
+                break;
+            case LEDState::PROCESSING:
+                run_processing(true);
                 break;
             default:
                 run_active(true);

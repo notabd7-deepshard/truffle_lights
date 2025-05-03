@@ -261,7 +261,8 @@ enum class LEDState : uint8_t {
     ACTIVE = 1 << 1,     // Value 2 when active should run
     RESPOND_TO_USER = 1 << 2,  // Value 4 when respond to user should run
     PROMPT = 1 << 3,      // Value 8 when prompt state should run
-    ERROR = 1 << 4       // Value 16 when error state should run
+    ERROR = 1 << 4,       // Value 16 when error state should run
+    PROCESSING = 1 << 5   // Value 32 when processing state should run
 };
 
 
@@ -903,6 +904,7 @@ public:
     void run_prompt(bool commit = true);
     void run_active(bool commit = true);
     void run_error(bool commit = true);
+    void run_processing(bool commit = true);
 
 private:
     spi_t spi;
@@ -919,6 +921,12 @@ private:
     LEDFrame         curF_{}, nextF_{}, blendedF_{};
     LEDState         pendingState_ = LEDState::DORMANT;
     bool             inTransition_ = false;
+
+    // Custom transition data (dynamic cross-fade between live states)
+    LEDState transitionFrom_ = LEDState::DORMANT;
+    LEDState transitionTo_   = LEDState::DORMANT;
+    std::chrono::time_point<std::chrono::high_resolution_clock> transitionStart_;
+    float transitionDurationMs_ = 1000.f;   // default 1 s — adjustable
 
     std::unique_ptr<LEDMatrix> liveMatrix_ = std::make_unique<LEDMatrix>();
 
