@@ -5,9 +5,13 @@ usage:
 as root run ./enable_spi.sh, this will hopefully enable SPI and reboot the orin 
 
 then compile with 'make clean all'
-
+(for the above command youll have to mnaully add state youd like to test)
 then run as root, ./ledtest 
-it just does a simple pulsing display for testing. 
+
+
+to test all states together run 'make state_test'
+then run as root, ./led_state_test 
+it will cycle through all states 
 
 
 LED PINS:
