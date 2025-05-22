@@ -310,6 +310,10 @@ void LEDController::run(){
             run_prompt();
             continue;
         }
+        else if(currentState == LEDState::CONNECTING){
+            run_connecting();
+            continue;
+        }
         
         // Must be in ACTIVE state if we get here
         // Clear the matrix for rendering
@@ -753,6 +757,52 @@ void LEDController::run_prompt() {
     
     // Smooth timing
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
+}
+
+void LEDController::run_connecting() {
+    // Create a static matrix so we do not re-allocate each frame
+    static std::unique_ptr<LEDMatrix> wifi_matrix = std::make_unique<LEDMatrix>();
+    // Wi-Fi uses the same blue colour as DORMANT state for now
+    const led_color_t wifi_blue = {40, 120, 255};
+
+    // Clear LED buffer for this frame
+    wifi_matrix->Clear(leds);
+
+    // -------- Draw Wi-Fi symbol --------
+    // 1. Central dot (radius 0)
+    try {
+        wifi_matrix->set_led(90.0f, 0, wifi_blue); // Use 90° so the symbol faces "up"
+    } catch (...) {}
+
+    // Helper lambda to draw an arc on a given ring between start & end angles (inclusive)
+    auto draw_arc = [&](int radius, float start_deg, float end_deg, float step_deg){
+        for(float ang = start_deg; ang <= end_deg; ang += step_deg){
+            try {
+                wifi_matrix->set_led(ang, radius, wifi_blue);
+            } catch (...) {
+                // Ignore out-of-range errors (e.g. if we mis-calculated indices)
+            }
+        }
+    };
+
+    // Ring 1 (radius 1): narrow arc around top (3 LEDs at 45°, 90°, 135°)
+    draw_arc(1, 45.0f, 135.0f, 45.0f);
+
+    // Ring 2 (radius 2): wider arc – 30° LED spacing
+    draw_arc(2, 60.0f, 120.0f, 30.0f);
+
+    // Ring 3 (radius 3): widest arc – 22.5° spacing  (slightly wider than ring2)
+    draw_arc(3, 45.0f, 135.0f, 22.5f);
+
+    // Optional: Ring 4 (radius 4) for a very broad arc; comment in/out as desired
+    // draw_arc(4, 30.0f, 150.0f, 15.0f);
+
+    // Update matrix -> leds array, then push to hardware
+    wifi_matrix->Update(leds);
+    update_leds();
+
+    // Slow the update rate a bit so CPU usage is minimal (static image)
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
 }
 
 #endif

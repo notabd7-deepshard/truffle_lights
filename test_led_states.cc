@@ -40,11 +40,11 @@ int main() {
         HSV{200.0f, 0.7f, 0.8f}    // Blue-cyan
     };
     
-    const std::array<HSV, 3> activeHSV = {
-        HSV{245.0f, 0.1f, 1.0f},   // White-ish
-        HSV{40.0f, 0.8f, 1.0f},    // Blue
-        HSV{290.0f, 0.7f, 0.9f}    // Purple
-    };
+    // const std::array<HSV, 3> activeHSV = {
+    //     HSV{245.0f, 0.1f, 1.0f},   // White-ish
+    //     HSV{40.0f, 0.8f, 1.0f},    // Blue
+    //     HSV{290.0f, 0.7f, 0.9f}    // Purple
+    // };
     
     const std::array<HSV, 3> respondHSV = {
         HSV{30.0f, 0.9f, 1.0f},    // Orange
@@ -70,14 +70,14 @@ int main() {
         if (!running) break;
         
         // Transition to active state
-        printTransition("DORMANT", "ACTIVE");
-        ledController.RequestState(LEDState::ACTIVE, activeHSV);
-        std::cout << "Running ACTIVE state for 15 seconds...\n";
-        std::this_thread::sleep_for(std::chrono::seconds(15));
-        if (!running) break;
+        // printTransition("DORMANT", "ACTIVE");
+        // ledController.RequestState(LEDState::ACTIVE, activeHSV);
+        // std::cout << "Running ACTIVE state for 15 seconds...\n";
+        // std::this_thread::sleep_for(std::chrono::seconds(15));
+        // if (!running) break;
         
         // Transition to respond-to-user state
-        printTransition("ACTIVE", "RESPOND_TO_USER");
+        printTransition("DORMANT", "RESPOND_TO_USER");
         ledController.RequestState(LEDState::RESPOND_TO_USER, respondHSV);
         std::cout << "Running RESPOND_TO_USER state for 15 seconds...\n";
         std::this_thread::sleep_for(std::chrono::seconds(15));
