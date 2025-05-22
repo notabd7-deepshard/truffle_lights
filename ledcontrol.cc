@@ -846,54 +846,60 @@ void LEDController::run_connecting() {
     // Clear LED buffer for this frame
     wifi_matrix->Clear(leds);
 
-    // -------- Draw Wi-Fi symbol --------
-    // Add simple state machine to animate symbol stages
-    static int anim_stage = 0;                 // 0 = dot only, 1 = +ring1, 2 = +ring2, 3 = full symbol
+    // --- Animated Wi-Fi symbol --------------------------------------
+    // Five-stage animation : 0=dot, 1=+arc r=1, 2=+arc r=2, 3=+arc r=3, 4=+arc r=4
+    static int  anim_stage = 0;
     static auto last_stage_change = std::chrono::high_resolution_clock::now();
-    const int   STAGE_DURATION_MS = 700;       // time each stage stays on-screen
+    constexpr int STAGE_DURATION_MS = 700;
 
-    // Advance animation stage after duration elapsed
+    // Advance stage
     auto now_time = std::chrono::high_resolution_clock::now();
     if (std::chrono::duration_cast<std::chrono::milliseconds>(now_time - last_stage_change).count() >= STAGE_DURATION_MS) {
-        anim_stage = (anim_stage + 1) % 4;     // loop through the 4 stages
+        anim_stage = (anim_stage + 1) % 5;   // advance through 5 stages
         last_stage_change = now_time;
     }
 
-    // 1. Central dot (radius 0)
+    // ------------------------------------------------------------------
+    // Always show the centre dot (acts as Wi-Fi signal origin)
     try {
-        wifi_matrix->set_led(90.0f, 0, wifi_blue); // Use 90° so the symbol faces "up"
-    } catch (...) {}
+        wifi_matrix->set_led(270.0f, 0, wifi_blue); // any angle OK – use 270° (down)
+    } catch(...) {}
 
-    // Helper lambda to draw an arc on a given ring between start & end angles (inclusive)
+    // Helper lambda to light an arc on a given ring
     auto draw_arc = [&](int radius, float start_deg, float end_deg, float step_deg){
-        for(float ang = start_deg; ang <= end_deg; ang += step_deg){
-            try {
-                wifi_matrix->set_led(ang, radius, wifi_blue);
-            } catch (...) {
-                // Ignore out-of-range errors (e.g. if we mis-calculated indices)
-            }
+        // ensure increasing order
+        if(start_deg > end_deg) std::swap(start_deg, end_deg);
+        for(float ang = start_deg; ang <= end_deg + 0.01f; ang += step_deg){
+            try { wifi_matrix->set_led(ang, radius, wifi_blue); } catch(...) {}
         }
     };
 
-    if(anim_stage >= 1){
-        // Ring 1 (radius 1): narrow arc around top (3 LEDs at 45°, 90°, 135°)
-        draw_arc(1, 45.0f, 135.0f, 45.0f);
-    }
+    // --- Draw arcs in increasing radius order ---------------------------
+    // Ring-specific step sizes (use natural LED spacing)
+    //const float STEP_R1 = 45.0f;   // ring 1 (8 LEDs)
+    const float STEP_R2 = 30.0f;   // ring 2 (12 LEDs)
+    //const float STEP_R3 = 22.5f;   // ring 3 (16 LEDs)
+    const float STEP_R4 = 15.0f;   // ring 4 (24 LEDs)
 
+    // Stage 1 : smallest arc – ring 1 (radius 1) : only bottom (270°) & bottom-right (315°)
+    // if(anim_stage >= 1){
+    //     draw_arc(1, 270.0f, 315.0f, STEP_R1);   // 2 LEDs: 270°,315°
+    // }
+
+    // Stage 2 : ring 2 (radius 2)
     if(anim_stage >= 2){
-        // Ring 2 (radius 2): wider arc – 30° LED spacing
-        draw_arc(2, 60.0f, 120.0f, 30.0f);
+        draw_arc(2, 240.0f, 330.0f, STEP_R2);   // 4 LEDs: 240°,270°,300°,330°
     }
 
-    if(anim_stage >= 3){
-        // Ring 3 (radius 3): widest arc – 22.5° spacing
-        draw_arc(3, 45.0f, 135.0f, 22.5f);
-    }
+    // Stage 3 : ring 3 (radius 3)
+    // if(anim_stage >= 3){
+    //     draw_arc(3, 225.0f, 337.5f, STEP_R3);   // wider arc (6 LEDs)
+    // }
 
-    // Optional: Ring 4 (radius 4) – uncomment to include & extend stage count
-    //if(anim_stage >= 4){
-    //    draw_arc(4, 30.0f, 150.0f, 15.0f);
-    //}
+    // Stage 4 : largest arc – ring 4 (radius 4)
+    if(anim_stage >= 4){
+        draw_arc(4, 210.0f, 330.0f, STEP_R4);   // full lower half
+    }
 
     // Update matrix -> leds array, then push to hardware
     wifi_matrix->Update(leds);
