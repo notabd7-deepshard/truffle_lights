@@ -58,6 +58,13 @@ int main() {
         HSV{0.0f, 0.0f, 0.8f}      // White variant
     };
     
+    // Boot state uses dormant blue plus white accents
+    const std::array<HSV, 3> bootHSV = {
+        HSV{220.0f, 0.7f, 0.8f},   // Blue (same as dormant primary)
+        HSV{0.0f, 0.0f, 1.0f},     // Pure white
+        HSV{0.0f, 0.0f, 0.9f}      // Slightly dimmer white
+    };
+    
     // Start with dormant state (using RequestState instead of SetState)
     printTransition("INIT", "DORMANT");
     ledController.RequestState(LEDState::DORMANT, dormantHSV);
@@ -76,8 +83,15 @@ int main() {
         // std::this_thread::sleep_for(std::chrono::seconds(15));
         // if (!running) break;
         
+        // Transition to BOOT state
+        printTransition("DORMANT", "BOOT");
+        ledController.RequestState(LEDState::BOOT, bootHSV);
+        std::cout << "Running BOOT state for 15 seconds...\n";
+        std::this_thread::sleep_for(std::chrono::seconds(15));
+        if (!running) break;
+        
         // Transition to respond-to-user state
-        printTransition("DORMANT", "RESPOND_TO_USER");
+        printTransition("BOOT", "RESPOND_TO_USER");
         ledController.RequestState(LEDState::RESPOND_TO_USER, respondHSV);
         std::cout << "Running RESPOND_TO_USER state for 15 seconds...\n";
         std::this_thread::sleep_for(std::chrono::seconds(15));

@@ -306,12 +306,20 @@ void LEDController::run(){
             run_respond_to_user();
             continue;
         }
+        else if(currentState == LEDState::BOOT){
+            run_boot();
+            continue;
+        }
         else if(currentState == LEDState::PROMPT){
             run_prompt();
             continue;
         }
         else if(currentState == LEDState::CONNECTING){
             run_connecting();
+            continue;
+        }
+        else if(currentState == LEDState::PLACEHOLDER_TRANSITION){
+            run_placeholder_transition();
             continue;
         }
         
@@ -759,16 +767,98 @@ void LEDController::run_prompt() {
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
 }
 
+void LEDController::run_boot() {
+    // Same base implementation as run_prompt but with blue orb and white background
+    static std::unique_ptr<LEDMatrix> boot_matrix = std::make_unique<LEDMatrix>();
+
+    // Animation state shared across calls
+    static float angle = 0.0f;
+    static const float ROTATION_SPEED = 300.0f; // degrees per second
+    static auto last_update = std::chrono::high_resolution_clock::now();
+
+    // Clear matrix for this frame
+    boot_matrix->Clear(leds);
+
+    // Time keeping for smooth motion
+    auto now = std::chrono::high_resolution_clock::now();
+    float elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_update).count();
+    last_update = now;
+
+    // Update rotation angle
+    angle += (ROTATION_SPEED / 1000.0f) * elapsed_ms;
+    if (angle >= 360.0f) angle -= 360.0f;
+
+    // Orb polar coordinates (radius 3)
+    polar_t orb_position = polar_t::Degrees(angle, 3);
+
+    // Colour palette – dormant style blue for orb, white/grey background
+    HSV orbHSV = {220.0f, 0.8f, 1.0f};       // Bright blue
+    const led_color_t bg_colour = {128, 128, 128}; // 50% white background
+
+    // Visual parameters
+    float sigma      = 3.5f;  // blur radius
+    float intensity  = 1.2f;  // overall brightness multiplier
+
+    // Fill background first
+    for (int i = 0; i < LED_COUNT; ++i) {
+        leds[i] = bg_colour;
+    }
+
+    // Pre-allocate influence array
+    std::vector<float> influence(LED_COUNT, 0.0f);
+
+    // Compute Gaussian influence per LED
+    for (int i = 0; i < LED_COUNT; ++i) {
+        polar_t p = led_lut[i];
+        float dθ  = angularDifference(p.theta, orb_position.theta);
+        float r̄   = (p.r + orb_position.r) * 0.5f;
+        float Δr  = p.r - orb_position.r;
+        float d2  = (dθ * r̄) * (dθ * r̄) + (Δr * Δr);
+        float F   = std::exp(-d2 / (2 * sigma * sigma));
+        influence[i] = F;
+    }
+
+    // Apply colour to framebuffer
+    for (int i = 0; i < LED_COUNT; ++i) {
+        float F = influence[i];
+        led_color_t orb_rgb = hsv2rgb(orbHSV) * (intensity * F);
+
+        // Blend with background – stronger influence = more orb colour
+        float blend = std::min(1.0f, F * 2.0f);
+        leds[i].r = static_cast<uint8_t>((1.0f - blend) * bg_colour.r + blend * orb_rgb.r);
+        leds[i].g = static_cast<uint8_t>((1.0f - blend) * bg_colour.g + blend * orb_rgb.g);
+        leds[i].b = static_cast<uint8_t>((1.0f - blend) * bg_colour.b + blend * orb_rgb.b);
+    }
+
+    // Push to hardware
+    update_leds();
+
+    // Frame pacing
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+}
+
 void LEDController::run_connecting() {
     // Create a static matrix so we do not re-allocate each frame
     static std::unique_ptr<LEDMatrix> wifi_matrix = std::make_unique<LEDMatrix>();
     // Wi-Fi uses the same blue colour as DORMANT state for now
-    const led_color_t wifi_blue = {40, 120, 255};
+    const led_color_t wifi_blue = {255, 255, 255};
 
     // Clear LED buffer for this frame
     wifi_matrix->Clear(leds);
 
     // -------- Draw Wi-Fi symbol --------
+    // Add simple state machine to animate symbol stages
+    static int anim_stage = 0;                 // 0 = dot only, 1 = +ring1, 2 = +ring2, 3 = full symbol
+    static auto last_stage_change = std::chrono::high_resolution_clock::now();
+    const int   STAGE_DURATION_MS = 700;       // time each stage stays on-screen
+
+    // Advance animation stage after duration elapsed
+    auto now_time = std::chrono::high_resolution_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now_time - last_stage_change).count() >= STAGE_DURATION_MS) {
+        anim_stage = (anim_stage + 1) % 4;     // loop through the 4 stages
+        last_stage_change = now_time;
+    }
+
     // 1. Central dot (radius 0)
     try {
         wifi_matrix->set_led(90.0f, 0, wifi_blue); // Use 90° so the symbol faces "up"
@@ -785,17 +875,25 @@ void LEDController::run_connecting() {
         }
     };
 
-    // Ring 1 (radius 1): narrow arc around top (3 LEDs at 45°, 90°, 135°)
-    draw_arc(1, 45.0f, 135.0f, 45.0f);
+    if(anim_stage >= 1){
+        // Ring 1 (radius 1): narrow arc around top (3 LEDs at 45°, 90°, 135°)
+        draw_arc(1, 45.0f, 135.0f, 45.0f);
+    }
 
-    // Ring 2 (radius 2): wider arc – 30° LED spacing
-    draw_arc(2, 60.0f, 120.0f, 30.0f);
+    if(anim_stage >= 2){
+        // Ring 2 (radius 2): wider arc – 30° LED spacing
+        draw_arc(2, 60.0f, 120.0f, 30.0f);
+    }
 
-    // Ring 3 (radius 3): widest arc – 22.5° spacing  (slightly wider than ring2)
-    draw_arc(3, 45.0f, 135.0f, 22.5f);
+    if(anim_stage >= 3){
+        // Ring 3 (radius 3): widest arc – 22.5° spacing
+        draw_arc(3, 45.0f, 135.0f, 22.5f);
+    }
 
-    // Optional: Ring 4 (radius 4) for a very broad arc; comment in/out as desired
-    // draw_arc(4, 30.0f, 150.0f, 15.0f);
+    // Optional: Ring 4 (radius 4) – uncomment to include & extend stage count
+    //if(anim_stage >= 4){
+    //    draw_arc(4, 30.0f, 150.0f, 15.0f);
+    //}
 
     // Update matrix -> leds array, then push to hardware
     wifi_matrix->Update(leds);
@@ -803,6 +901,77 @@ void LEDController::run_connecting() {
 
     // Slow the update rate a bit so CPU usage is minimal (static image)
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
+}
+
+void LEDController::run_placeholder_transition() {
+    // Matrix reused across frames
+    static std::unique_ptr<LEDMatrix> ph_matrix = std::make_unique<LEDMatrix>();
+
+    // Reset animation variables if requested
+    if(!ph_initialized){
+        ph_filled_angle_deg = 30.0f;
+        ph_current_radius   = 0;
+        ph_last_update      = std::chrono::high_resolution_clock::now();
+        ph_initialized      = true;
+    }
+
+    // Tunable parameters
+    constexpr float ANGULAR_SPEED = 720.0f;         // Degrees per second that the sector grows
+    const     led_color_t OFF_COLOUR    = {0, 0, 0};
+
+    //---------------------------------------------------------------------
+    // Time keeping to make animation frame-rate independent
+    auto now  = std::chrono::high_resolution_clock::now();
+    float dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - ph_last_update).count();
+    ph_last_update = now;
+
+    // Grow the lit sector by ANGULAR_SPEED * dt
+    ph_filled_angle_deg += ANGULAR_SPEED * (dt_ms / 1000.0f);
+
+    // When the sector completes a full circle, move to the next ring
+    if (ph_filled_angle_deg >= 360.0f) {
+        ph_filled_angle_deg = 0.0f;
+        if (ph_current_radius < 4) {
+            ph_current_radius++;          // Advance to next ring (layer-by-layer)
+        }
+    }
+
+    // Once every ring is filled, just keep the entire matrix lit
+    bool fully_filled = (ph_current_radius >= 4 && ph_filled_angle_deg >= 359.9f);
+
+    //---------------------------------------------------------------------
+    // Clear framebuffer for this frame
+    ph_matrix->Clear(leds);
+
+    // Iterate through each LED to decide if it should be lit this frame
+    for (int i = 0; i < LED_COUNT; ++i) {
+        polar_t p = led_lut[i];
+
+        // Normalize angle to [0, 360)
+        float ang_deg = p.angle_deg();
+        while (ang_deg < 0.0f)   ang_deg += 360.0f;
+        while (ang_deg >= 360.0f) ang_deg -= 360.0f;
+
+        bool radius_ok = (p.r <= static_cast<float>(ph_current_radius) + 0.01f);
+        bool angle_ok  = (ang_deg <= ph_filled_angle_deg);
+
+        if (fully_filled || (radius_ok && angle_ok)) {
+            leds[i] = placeholderColor;
+        } else {
+            leds[i] = OFF_COLOUR;
+        }
+    }
+
+    // Push framebuffer to LEDs
+    update_leds();
+
+    // Modest frame pacing to reduce CPU
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+}
+
+void LEDController::SetPlaceholderColor(const led_color_t& c){
+    placeholderColor = c;
+    ph_initialized = false; // force animation reset next time it runs
 }
 
 #endif

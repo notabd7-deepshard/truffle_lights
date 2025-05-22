@@ -222,13 +222,15 @@ needs global brightness modifier
 
 #define DEFAULT_COLOR {128, 128, 128}
 
-// ==== Added: LED system states ====
+
 enum class LEDState : uint8_t {
     DORMANT = 1,         // Value 1 when dormant should run
     ACTIVE = 1 << 1,     // Value 2 when active should run
     RESPOND_TO_USER = 1 << 2,  // Value 4 when respond to user should run
     PROMPT = 1 << 3,     // Value 8 when prompt state should run
-    CONNECTING = 1 << 4  // Value 16 when device is connecting (Wi-Fi symbol)
+    CONNECTING = 1 << 4,  // Value 16 when device is connecting (Wi-Fi symbol)
+    BOOT = 1 << 5,         // Value 32 when device is booting up (blue/white spinning orb)
+    PLACEHOLDER_TRANSITION = 1 << 6  // Value 64 for placeholder transition animation
 };
 
 using LEDArray = std::array<led_color_t, LED_COUNT>;
@@ -1083,6 +1085,7 @@ public:
             control_thread = std::thread(&LEDController::run, this);
         }
         else puts("ledcontrol failed to init SPI");
+        ph_last_update = std::chrono::high_resolution_clock::now();
     }
     ~LEDController(){
         shutdown();
@@ -1101,6 +1104,9 @@ public:
     // Add transition function for testing
     void run_transition_test();
 
+    // --- Customisation for placeholder transition ---
+    void SetPlaceholderColor(const led_color_t& c);
+
 private:
     spi_t spi;
     std::array<polar_t, LED_COUNT> led_lut;
@@ -1116,6 +1122,13 @@ private:
     std::optional<LEDState> pendingNextState;
     std::array<HSV, 3> currentHSV;
     std::array<HSV, 3> nextHSV;
+
+    // Variables for Placeholder Transition Animation
+    led_color_t placeholderColor{255,255,255};
+    float       ph_filled_angle_deg = 30.0f;
+    int         ph_current_radius   = 0;
+    std::chrono::time_point<std::chrono::high_resolution_clock> ph_last_update;
+    bool        ph_initialized = false;
 
     void buildLUT();
 
@@ -1156,6 +1169,8 @@ private:
     void run_respond_to_user();
     void run_prompt();
     void run_connecting();
+    void run_boot();
+    void run_placeholder_transition();
 };
 
 
