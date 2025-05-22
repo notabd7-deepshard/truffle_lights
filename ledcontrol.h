@@ -1075,6 +1075,107 @@ private:
     std::chrono::time_point<std::chrono::high_resolution_clock> phase_start_time;
 };
 
+class WiFiSymbol {
+public:
+    struct WiFiElement {
+        polar_t position;     // relative position from symbol center
+        bool is_arc;          // true for arc, false for single point
+        float arc_span_deg;   // arc span in degrees (ignored if is_arc is false)
+        
+        WiFiElement(polar_t pos, bool arc = false, float span = 0.0f) 
+            : position(pos), is_arc(arc), arc_span_deg(span) {}
+    };
+    
+    WiFiSymbol(float signal_direction_deg = 270.0f) : direction(signal_direction_deg) {
+        // Define WiFi symbol with center dot and 3 concentric arcs
+        // All positions are relative to symbol center
+        
+        // Center dot (origin)
+        elements.push_back(WiFiElement(polar_t{0.0f, 0.0f}, false));
+        
+        // Arc 1: Inner arc on ring 2, 90 degrees
+        elements.push_back(WiFiElement(polar_t::Degrees(0.0f, 2), true, 90.0f));
+        
+        // Arc 2: Middle arc on ring 3, 120 degrees  
+        elements.push_back(WiFiElement(polar_t::Degrees(0.0f, 3), true, 120.0f));
+        
+        // Arc 3: Outer arc on ring 4, 150 degrees
+        elements.push_back(WiFiElement(polar_t::Degrees(0.0f, 4), true, 150.0f));
+    }
+    
+    void SetDirection(float direction_deg) { direction = direction_deg; }
+    void SetPosition(polar_t pos) { center = pos; }
+    
+    void DrawElement(LEDMatrix* matrix, int element_index, led_color_t color) {
+        if (element_index >= elements.size()) return;
+        
+        const WiFiElement& elem = elements[element_index];
+        
+        if (!elem.is_arc) {
+            // Draw single point
+            polar_t world_pos = TransformPoint(elem.position);
+            try {
+                matrix->set_led(world_pos, color);
+            } catch(...) {}
+        } else {
+            // Draw arc
+            polar_t arc_center = TransformPoint(elem.position);
+            float half_span = elem.arc_span_deg * 0.5f;
+            
+            // Calculate start and end angles in world coordinates
+            float start_angle = direction - half_span;
+            float end_angle = direction + half_span;
+            
+            // Determine step size based on ring
+            int ring = static_cast<int>(arc_center.r);
+            float step_deg = GetStepSizeForRing(ring);
+            
+            // Draw the arc
+            for (float angle = start_angle; angle <= end_angle + 0.01f; angle += step_deg) {
+                try {
+                    matrix->set_led(angle, ring, color);
+                } catch(...) {}
+            }
+        }
+    }
+    
+    void Draw(LEDMatrix* matrix, led_color_t color, int max_elements = -1) {
+        int num_elements = (max_elements < 0) ? elements.size() : std::min(max_elements, (int)elements.size());
+        
+        for (int i = 0; i < num_elements; i++) {
+            DrawElement(matrix, i, color);
+        }
+    }
+    
+    size_t GetElementCount() const { return elements.size(); }
+    
+private:
+    std::vector<WiFiElement> elements;
+    polar_t center = {0.0f, 0.0f};      // symbol center in world coordinates
+    float direction = 270.0f;           // direction signal points (degrees)
+    
+    polar_t TransformPoint(const polar_t& relative_pos) {
+        // For now, just apply the center offset
+        // In the future, could add rotation transforms here
+        polar_t result = relative_pos;
+        result.theta += DEG2RAD(direction);
+        result.r += center.r;
+        result.normalize();
+        return result;
+    }
+    
+    float GetStepSizeForRing(int ring) {
+        // Return appropriate step size based on number of LEDs in ring
+        switch(ring) {
+            case 1: return 45.0f;   // 8 LEDs
+            case 2: return 30.0f;   // 12 LEDs  
+            case 3: return 22.5f;   // 16 LEDs
+            case 4: return 15.0f;   // 24 LEDs
+            default: return 30.0f;
+        }
+    }
+};
+
 class LEDController
 {
 public:

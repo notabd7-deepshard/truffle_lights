@@ -838,74 +838,38 @@ void LEDController::run_boot() {
 }
 
 void LEDController::run_connecting() {
-    // Create a static matrix so we do not re-allocate each frame
+    // Create a static matrix and WiFi symbol
     static std::unique_ptr<LEDMatrix> wifi_matrix = std::make_unique<LEDMatrix>();
-    // Wi-Fi uses the same blue colour as DORMANT state for now
-    const led_color_t wifi_blue = {255, 255, 255};
+    static WiFiSymbol wifi_symbol(270.0f);  // Signal pointing upward (270 degrees)
+    
+    // WiFi blue color (same as before)
+    const led_color_t wifi_blue = {40, 120, 255};  // Nice blue like dormant state
 
     // Clear LED buffer for this frame
     wifi_matrix->Clear(leds);
 
-    // --- Animated Wi-Fi symbol --------------------------------------
-    // Five-stage animation : 0=dot, 1=+arc r=1, 2=+arc r=2, 3=+arc r=3, 4=+arc r=4
-    static int  anim_stage = 0;
-    static auto last_stage_change = std::chrono::high_resolution_clock::now();
-    constexpr int STAGE_DURATION_MS = 700;
+    // Animation state: builds WiFi symbol element by element
+    static int current_element = 0;
+    static auto last_element_change = std::chrono::high_resolution_clock::now();
+    constexpr int ELEMENT_DURATION_MS = 800;  // Time to show each element
 
-    // Advance stage
+    // Advance to next element
     auto now_time = std::chrono::high_resolution_clock::now();
-    if (std::chrono::duration_cast<std::chrono::milliseconds>(now_time - last_stage_change).count() >= STAGE_DURATION_MS) {
-        anim_stage = (anim_stage + 1) % 5;   // advance through 5 stages
-        last_stage_change = now_time;
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now_time - last_element_change).count() >= ELEMENT_DURATION_MS) {
+        current_element = (current_element + 1) % (wifi_symbol.GetElementCount() + 1);  // +1 for pause between cycles
+        last_element_change = now_time;
     }
 
-    // ------------------------------------------------------------------
-    // Always show the centre dot (acts as Wi-Fi signal origin)
-    try {
-        wifi_matrix->set_led(270.0f, 0, wifi_blue); // any angle OK – use 270° (down)
-    } catch(...) {}
-
-    // Helper lambda to light an arc on a given ring
-    auto draw_arc = [&](int radius, float start_deg, float end_deg, float step_deg){
-        // ensure increasing order
-        if(start_deg > end_deg) std::swap(start_deg, end_deg);
-        for(float ang = start_deg; ang <= end_deg + 0.01f; ang += step_deg){
-            try { wifi_matrix->set_led(ang, radius, wifi_blue); } catch(...) {}
-        }
-    };
-
-    // --- Draw arcs in increasing radius order ---------------------------
-    // Ring-specific step sizes (use natural LED spacing)
-    //const float STEP_R1 = 45.0f;   // ring 1 (8 LEDs)
-    const float STEP_R2 = 30.0f;   // ring 2 (12 LEDs)
-    //const float STEP_R3 = 22.5f;   // ring 3 (16 LEDs)
-    const float STEP_R4 = 15.0f;   // ring 4 (24 LEDs)
-
-    // Stage 1 : smallest arc – ring 1 (radius 1) : only bottom (270°) & bottom-right (315°)
-    // if(anim_stage >= 1){
-    //     draw_arc(1, 270.0f, 315.0f, STEP_R1);   // 2 LEDs: 270°,315°
-    // }
-
-    // Stage 2 : ring 2 (radius 2)
-    if(anim_stage >= 2){
-        draw_arc(2, 240.0f, 330.0f, STEP_R2);   // 4 LEDs: 240°,270°,300°,330°
-    }
-
-    // Stage 3 : ring 3 (radius 3)
-    // if(anim_stage >= 3){
-    //     draw_arc(3, 225.0f, 337.5f, STEP_R3);   // wider arc (6 LEDs)
-    // }
-
-    // Stage 4 : largest arc – ring 4 (radius 4)
-    if(anim_stage >= 4){
-        draw_arc(4, 210.0f, 330.0f, STEP_R4);   // full lower half
+    // Draw WiFi symbol up to current element (skip the pause cycle)
+    if (current_element < wifi_symbol.GetElementCount()) {
+        wifi_symbol.Draw(wifi_matrix.get(), wifi_blue, current_element + 1);
     }
 
     // Update matrix -> leds array, then push to hardware
     wifi_matrix->Update(leds);
     update_leds();
 
-    // Slow the update rate a bit so CPU usage is minimal (static image)
+    // Frame pacing
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 }
 

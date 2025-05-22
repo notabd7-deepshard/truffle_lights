@@ -1,41 +1,48 @@
-EXE:=ledtest
+CXX = g++
+CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -pthread -I.
+LDFLAGS = -pthread
 
-CONNECT_EXE:=test_connecting
+# Source files (note: spi is header-only)
+SOURCES = ledcontrol.cc
 
-.PHONY: all
-all: $(EXE)
+# Object files
+OBJECTS = $(SOURCES:.cc=.o)
 
-.PHONY: clean
+# Main targets
+all: test_connecting_state wifi_symbol_demo
+
+test_connecting_state: test_connecting_state.o $(OBJECTS)
+	$(CXX) $(LDFLAGS) -o $@ $^
+
+wifi_symbol_demo: wifi_symbol_demo.o $(OBJECTS)
+	$(CXX) $(LDFLAGS) -o $@ $^
+
+# Object file rules
+%.o: %.cc
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
 clean:
-	rm -fv $(EXE) *.o 
+	rm -f *.o test_connecting_state wifi_symbol_demo
 
-$(EXE):
-	g++ -I. ledcontrol.cc main.cc -o $(EXE)
+# Convenience targets
+.PHONY: clean all run_connect run_demo
 
-.PHONY: exec
-exec:
-	sudo ./$(EXE)
+run_connect: test_connecting_state
+	@echo "Running connecting state test..."
+	sudo ./test_connecting_state
 
-.PHONY: run
-run: clean all exec
+run_demo: wifi_symbol_demo
+	@echo "Running WiFi symbol demo..."
+	sudo ./wifi_symbol_demo
 
-.PHONY: stop
-stop:
-	sudo systemctl stop truffle.service
-
-.PHONY: start
-start:
-	sudo systemctl start truffle.service
-
-.PHONY: connecting
-connecting: $(CONNECT_EXE)
-
-$(CONNECT_EXE):
-	g++ -I. ledcontrol.cc test_connecting_state.cc -o $(CONNECT_EXE)
-
-.PHONY: connect
-connect: clean connecting exec_connect
-
-.PHONY: exec_connect
-exec_connect:
-	sudo ./$(CONNECT_EXE)
+# Help target
+help:
+	@echo "Available targets:"
+	@echo "  make all          - Build both test programs"
+	@echo "  make wifi_symbol_demo - Build just the demo"
+	@echo "  make test_connecting_state - Build just the test"
+	@echo "  make run_demo     - Build and run the WiFi demo"
+	@echo "  make run_connect  - Build and run connecting test"
+	@echo "  make clean        - Remove built files"
+	@echo ""
+	@echo "Note: You need SPI enabled. Run setup/enable_spi.sh first if not done"
